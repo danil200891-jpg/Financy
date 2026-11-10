@@ -9,7 +9,7 @@ import { dayLabel, fmt, plural } from '../lib/format'
 import type { OpType } from '../lib/types'
 import { Card, CategoryIcon, ChevronLeft, ICONS, IconButton, PrimaryButton, Segmented, Sheet } from '../components/ui'
 import { GoogleDriveBackup } from '../components/GoogleDriveBackup'
-import { finishDriveRestore } from '../lib/drive-backup'
+import { finishDriveRestore, completeDriveRestore } from '../lib/drive-backup'
 
 const PALETTE = ['#3fe0c5', '#7c8cff', '#9f6bff', '#ffc56b', '#ff9f6b', '#ff6b81', '#6bc5ff', '#5ee08a', '#ff7ad9']
 
@@ -164,7 +164,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
     try {
       const s = await restore(pending, mode)
       setPending(null)
-      if (fromDrive) finishDriveRestore()
+      if (fromDrive) await completeDriveRestore()
       setFromDrive(false)
       toast(
         mode === 'replace'
@@ -281,7 +281,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
         <Dialog onClose={() => { if (busy) return; setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }}>
           <p className="text-[17px] font-semibold">Восстановить копию?</p>
           <p className="mt-1 text-[14px] text-mist">
-            Копия от {dayLabel(pending.exportedAt).toLowerCase()}: {pending.operations.filter((o) => !o.deletedAt).length} операций, {pending.clients.filter((c) => !c.deletedAt).length} клиентов.
+            Копия от {new Date(pending.exportedAt).toLocaleString('ru-RU')}: {pending.operations.filter((o) => !o.deletedAt).length} операций, {pending.clients.filter((c) => !c.deletedAt).length} клиентов.
           </p>
           <div className="mt-5 space-y-2">
             <button disabled={busy} onClick={() => doRestore('merge')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">

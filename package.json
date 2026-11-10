@@ -15,6 +15,7 @@
     "iphone:http": "npm run build && vite preview --host --mode lan-http --port 4180",
     "check": "tsc -b",
     "test:app": "node scripts/test-app.mjs",
+    "test:preview": "node scripts/test-preview.mjs",
     "test:drive": "node scripts/test-drive-backup.mjs",
     "prepare": "git config core.hooksPath .githooks || true"
   },

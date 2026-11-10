@@ -17,6 +17,8 @@ await build({
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'), __APP_VERSION__: JSON.stringify('drive-regression'),
     'import.meta.env.VITE_GOOGLE_CLIENT_ID': JSON.stringify('synthetic.apps.googleusercontent.com'),
+    'import.meta.env.VITE_GOOGLE_PICKER_API_KEY': JSON.stringify('synthetic-picker-key'),
+    'import.meta.env.VITE_GOOGLE_PROJECT_NUMBER': JSON.stringify('12345'),
   },
   build: { outDir: output, lib: { entry: resolve('scripts/drive-backup-regression.ts'), formats: ['es'], fileName: () => 'test.js' } },
 })

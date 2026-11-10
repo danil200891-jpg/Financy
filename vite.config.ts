@@ -11,6 +11,14 @@ import { lanDiagnostics } from './scripts/lan-diagnostics.ts'
 const hasLocalCert = existsSync('.cert/server.crt') && existsSync('.cert/server.key')
 const localHttps = hasLocalCert ? { cert: readFileSync('.cert/server.crt'), key: readFileSync('.cert/server.key') } : undefined
 
+/** Preview must serve the same subpath as the existing production build. */
+function builtBase() {
+  if (!existsSync('dist/index.html')) return '/'
+  const script = readFileSync('dist/index.html', 'utf8').match(/<script\b[^>]*\bsrc="([^"]*\/assets\/[^"?]+\.js)"/)?.[1]
+  const assets = script?.lastIndexOf('/assets/') ?? -1
+  return assets >= 0 ? script!.slice(0, assets + 1) : '/'
+}
+
 /**
  * Production CSP permits the local app and the Google endpoints required by the
  * optional Drive backup. OCR remains local, including its worker and language data.
@@ -18,10 +26,10 @@ const localHttps = hasLocalCert ? { cert: readFileSync('.cert/server.crt'), key:
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://accounts.google.com/gsi/",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://accounts.google.com/gsi/ https://apis.google.com/",
   "worker-src 'self' blob:",
   "connect-src 'self' blob: data: https://accounts.google.com/gsi/ https://www.googleapis.com/drive/ https://www.googleapis.com/upload/drive/",
-  "frame-src https://accounts.google.com/gsi/",
+  "frame-src https://accounts.google.com/gsi/ https://docs.google.com/picker",
   "img-src 'self' data: blob:",
   "media-src 'self' blob: mediastream:",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
@@ -38,10 +46,10 @@ const cspPlugin = (): Plugin => ({
   transformIndexHtml: () => [{ tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: CSP }, injectTo: 'head-prepend' }],
 })
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, isPreview }) => ({
   // GitHub Pages serves a project site from /<repo>/ — the deploy workflow sets BASE_PATH.
   // Locally it stays "/".
-  base: process.env.BASE_PATH || '/',
+  base: process.env.BASE_PATH || (isPreview ? builtBase() : '/'),
   // shown in Settings so you can see which version is installed after an update
   define: { __APP_VERSION__: JSON.stringify(`${process.env.npm_package_version ?? '0'} · ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`) },
   // transpile JS syntax down to what iOS 15 Safari understands

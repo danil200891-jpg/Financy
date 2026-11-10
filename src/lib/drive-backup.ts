@@ -1,14 +1,20 @@
 import { useSyncExternalStore } from 'react'
 import { buildBackup, parseBackup } from './backup'
 import { db, onDataChanged, setMeta } from './db'
-import { DriveClient, DriveError } from './google-drive'
+import { DriveClient, DriveError, FOLDER_ID, FOLDER_NAME, type DriveFile } from './google-drive'
 import { GOOGLE_CLIENT_ID, loadGoogleIdentity, requestDriveAccess } from './google-auth'
+import { pickDriveFolder } from './google-picker'
 
 interface AccountBackup {
   folderId?: string
   fileId?: string
   digest?: string
   lastSuccess?: string
+  folderPending?: boolean
+  filePending?: boolean
+  headRevision?: string
+  day?: string
+  cleanupPending?: boolean
 }
 
 interface DriveState {
@@ -18,6 +24,9 @@ interface DriveState {
   busy: boolean
   lastSuccess?: string
   error?: string
+  folderId?: string
+  folderRequired?: boolean
+  reviewRequired?: boolean
 }
 
 let state: DriveState = { enabled: false, ready: false, connected: false, busy: false }
@@ -45,7 +54,27 @@ let paused = false
 let timer: ReturnType<typeof setTimeout> | undefined
 let retryDelay = 5000
 let initialized: Promise<void> | undefined
+let reviewedFile: DriveFile | undefined
 const owner = randomId()
+
+/** Local calendar days, with UTC arithmetic to avoid DST-length-day errors. */
+export function backupDay(now = new Date()) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+export function retentionCutoff(day: string) {
+  const date = new Date(`${day}T12:00:00Z`)
+  date.setUTCDate(date.getUTCDate() - 29)
+  return date.toISOString().slice(0, 10)
+}
+
+async function snapshotDigest(backup: Awaited<ReturnType<typeof buildBackup>>) {
+  const { exportedAt: _exportedAt, ...data } = backup
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(data)))
+  return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+const daily = (file: DriveFile, day: string) => !file.trashed && file.appProperties?.role === 'daily' && file.appProperties.day === day && file.parents?.includes(FOLDER_ID)
 
 function randomId() {
   return [...crypto.getRandomValues(new Uint8Array(16))].map((value) => value.toString(16).padStart(2, '0')).join('')
@@ -140,22 +169,7 @@ export function connectDrive() {
     try {
       const nextCredentials = await access
       if (session !== generation) return
-      controller.abort()
-      controller = new AbortController()
-      credentials = nextCredentials
-      const nextAccountId = await client().account()
-      if (session !== generation) return
-      accountId = nextAccountId
-      const settings = await accountSettings()
-      if (session !== generation) return
-      await setMeta('driveBackup:enabled', true)
-      if (session !== generation) {
-        await setMeta('driveBackup:enabled', state.enabled)
-        return
-      }
-      update({ enabled: true, connected: true, lastSuccess: settings.lastSuccess })
-      retryDelay = 5000
-      schedule()
+      await establishConnection(nextCredentials, session)
     } catch (error) {
       if (session === generation) {
         credentials = undefined
@@ -166,6 +180,92 @@ export function connectDrive() {
   })()
 }
 
+async function establishConnection(access: { token: string; expiresAt: number }, session: number) {
+  controller.abort()
+  controller = new AbortController()
+  credentials = access
+  const nextAccount = await client().account()
+  if (session !== generation) return
+  accountId = nextAccount
+  const settings = await accountSettings()
+  if (session !== generation) return
+  await setMeta('driveBackup:enabled', true)
+  if (session !== generation) return
+  update({ enabled: true, connected: true, lastSuccess: settings.lastSuccess, folderId: undefined, folderRequired: false, reviewRequired: false })
+  retryDelay = 5000
+  try { if (await findFolder(client(), settings, accountKey())) schedule() }
+  catch (error) { report(error); schedule() }
+}
+
+async function findFolder(drive: DriveClient, settings: AccountBackup, key: string) {
+  try {
+    // A known folder ID is tried directly; never fall back to a same-name folder.
+    const folder = await drive.file(FOLDER_ID)
+    if (folder.trashed || folder.name !== FOLDER_NAME || folder.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Указанная папка Financy Backup не найдена или находится в корзине. Другие папки не используются.')
+    if (folder.capabilities?.canAddChildren === false) throw new Error('Нет права добавлять файлы в указанную папку. Нужен аккаунт с правом редактора этой папки.')
+    settings.folderId = FOLDER_ID
+    settings.folderPending = false
+    await setMeta(key, settings)
+    update({ folderId: FOLDER_ID, folderRequired: false, error: undefined })
+    return FOLDER_ID
+  } catch (error) {
+    if (!(error instanceof DriveError) || ![403, 404].includes(error.status)) throw error
+    update({ folderRequired: true, folderId: undefined, error: `Google Drive вернул ${error.status} для указанной папки. Доступ drive.file не подтверждён: выберите именно эту папку через Google Picker. Другие папки создаваться не будут.` })
+  }
+}
+
+async function findBackup(drive: DriveClient, settings: AccountBackup, folderId: string, key: string, day: string) {
+  if (settings.day !== day) {
+    settings.day = day
+    settings.fileId = undefined; settings.headRevision = undefined; settings.digest = undefined; settings.filePending = false
+    update({ reviewRequired: false })
+  }
+  const pendingId = settings.filePending ? settings.fileId : undefined
+  if (settings.fileId) {
+    try {
+      const file = await drive.file(settings.fileId)
+      if (daily(file, day) && file.appProperties?.financy === 'financy-backup-v1') return file
+    } catch (error) {
+      if (!(error instanceof DriveError) || error.status !== 404) throw error
+    }
+    settings.fileId = undefined
+    settings.headRevision = undefined
+    settings.digest = undefined
+  }
+  const candidates = (await drive.backups(folderId)).filter((file) => daily(file, day))
+  if (candidates.length === 1) {
+    settings.fileId = candidates[0].id
+    settings.filePending = false
+    await setMeta(key, settings)
+    return drive.file(settings.fileId)
+  }
+  if (candidates.length > 1) {
+    update({ reviewRequired: true, error: 'За этот день найдено несколько копий. Выберите и объедините нужную копию перед автосохранением. Существующие дубликаты не удалены.' })
+    return
+  }
+  settings.fileId = pendingId ?? await drive.generatedId()
+  settings.filePending = true
+  await setMeta(key, settings)
+}
+
+export async function selectDriveFolder() {
+  if (!credentials) return
+  const session = generation
+  update({ busy: true, error: undefined })
+  try {
+    const id = await pickDriveFolder(credentials.token)
+    if (!id || session !== generation) return
+    if (id !== FOLDER_ID) throw new Error('Выбрана другая папка. Нужна именно указанная папка Financy Backup.')
+    const folder = await client().file(id)
+    if (folder.trashed || folder.name !== FOLDER_NAME || folder.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Указанная папка недоступна.')
+    const settings = await accountSettings()
+    await setMeta(accountKey(), { ...settings, folderId: id, folderPending: false, fileId: undefined, headRevision: undefined, digest: undefined })
+    update({ folderRequired: false, folderId: id, reviewRequired: false })
+    schedule(500)
+  } catch (error) { if (session === generation) report(error) }
+  finally { if (session === generation) update({ busy: false }) }
+}
+
 export async function disconnectDrive() {
   ++generation
   clearTimeout(timer)
@@ -173,7 +273,7 @@ export async function disconnectDrive() {
   controller.abort()
   accountId = ''
   paused = false
-  update({ enabled: false, connected: false, busy: false, error: undefined })
+  update({ enabled: false, connected: false, busy: false, error: undefined, folderId: undefined, folderRequired: false, reviewRequired: false })
   try { await setMeta('driveBackup:enabled', false) } catch {
     update({ error: 'Копирование в этой вкладке остановлено. Не удалось сохранить настройку отключения на устройстве.' })
   }
@@ -202,38 +302,57 @@ export async function saveDriveBackup() {
     if (paused || session !== generation) return
     update({ busy: true })
     const settings = await accountSettings()
+    const folderId = await findFolder(drive, settings, key)
+    if (!folderId || paused || session !== generation) return
     const backup = await buildBackup()
-    const { exportedAt: _exportedAt, ...data } = backup
-    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(data)))
-    const digest = [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('')
-    if (digest === settings.digest) { succeeded = true; update({ error: undefined, lastSuccess: settings.lastSuccess }); return }
-    if (!settings.folderId) {
-      const folders = await drive.folders()
-      settings.folderId = folders[0]?.id ?? await drive.generatedId()
-      await setMeta(key, settings)
-      if (!folders.length) await drive.createFolder(settings.folderId)
-    } else {
-      // Retries use the same pre-generated ID, including when a create response was lost.
-      try { await drive.file(settings.folderId) } catch (error) {
-        if (!(error instanceof DriveError) || error.status !== 404) throw error
-        await drive.createFolder(settings.folderId)
+    const digest = await snapshotDigest(backup)
+    const day = backupDay()
+    // Opening the app on a new day does not manufacture unchanged copies.
+    if (settings.day && settings.day !== day && digest === settings.digest) { succeeded = true; update({ error: undefined }); return }
+    const file = await findBackup(drive, settings, folderId, key, day)
+    if (!settings.fileId || state.reviewRequired) return
+    if (file && file.headRevisionId !== settings.headRevision) {
+      const remote = parseBackup(await drive.download(file.id))
+      if (await snapshotDigest(remote) !== digest) {
+        update({ reviewRequired: true, error: 'Копия Drive найдена или изменена с другого устройства. Сначала объедините её с локальными данными.' })
+        return
       }
-    }
-    if (!settings.fileId) {
-      const files = await drive.backups()
-      settings.fileId = files.find((file) => file.appProperties?.device === deviceId)?.id ?? await drive.generatedId()
+      // Also recovers a lost upload response or local settings without another file.
+      settings.headRevision = file.headRevisionId
+      settings.digest = digest
+      settings.filePending = false
+      settings.lastSuccess = file.modifiedTime ?? settings.lastSuccess
       await setMeta(key, settings)
+      if (settings.lastSuccess) await setMeta('driveBackup:lastSuccess', settings.lastSuccess)
+    }
+    if (file && !file.headRevisionId) throw new Error('Drive не вернул версию файла. Сохранение приостановлено.')
+    if (digest === settings.digest && file) {
+      succeeded = true
+      update({ error: undefined, lastSuccess: settings.lastSuccess })
+      if (settings.cleanupPending) {
+        if (await snapshotDigest(parseBackup(await drive.download(file.id))) !== digest) throw new Error('Копия изменилась. Старые файлы сохранены.')
+        await finishRetention(drive, file, day, settings, key, session)
+      }
+      return
     }
     if (paused || session !== generation) return
-    await drive.upload(settings.fileId, settings.folderId, deviceId, JSON.stringify(backup))
+    if (backupDay() !== day) { schedule(500); return }
+    const uploaded = await drive.upload(settings.fileId, folderId, deviceId, JSON.stringify(backup), file?.headRevisionId, day)
+    if (session !== generation) return
+    // A successful HTTP response alone is insufficient to start retention cleanup.
+    if (await snapshotDigest(parseBackup(await drive.download(uploaded.id))) !== digest) throw new Error('Содержимое копии не прошло проверку. Старые копии сохранены.')
     if (session !== generation) return
     settings.digest = digest
+    settings.headRevision = uploaded.headRevisionId
+    settings.filePending = false
     settings.lastSuccess = new Date().toISOString()
+    settings.cleanupPending = true
     await setMeta(key, settings)
     await setMeta('driveBackup:lastSuccess', settings.lastSuccess)
     update({ lastSuccess: settings.lastSuccess, error: undefined })
     succeeded = true
     retryDelay = 5000
+    await finishRetention(drive, uploaded, day, settings, key, session)
   } catch (error) {
     if (session === generation) {
       report(error)
@@ -251,23 +370,84 @@ export async function saveDriveBackup() {
 export async function listDriveBackups() {
   paused = true
   clearTimeout(timer)
-  try { return await client().backups() } catch (error) {
+  try {
+    const settings = await accountSettings()
+    const drive = client()
+    if (!await findFolder(drive, settings, accountKey())) throw new Error('Нет доступа к указанной папке Financy Backup.')
+    return (await drive.backups(FOLDER_ID)).sort((a, b) => (b.appProperties?.day ?? b.modifiedTime ?? '').localeCompare(a.appProperties?.day ?? a.modifiedTime ?? ''))
+  } catch (error) {
     finishDriveRestore()
     report(error)
     throw error
   }
 }
 
-export async function downloadDriveBackup(id: string) {
-  try { return parseBackup(await client().download(id)) } catch (error) {
+export async function downloadDriveBackup(id: string, revisionId?: string) {
+  try {
+    const file = await client().file(id)
+    if (!file.parents?.includes(FOLDER_ID) || file.trashed || file.appProperties?.financy !== 'financy-backup-v1') throw new Error('Копия находится вне указанной папки Financy Backup.')
+    const backup = parseBackup(revisionId ? await client().revisionText(id, revisionId) : await client().download(id))
+    reviewedFile = file
+    return backup
+  } catch (error) {
     report(error)
     throw error
   }
 }
 
 export function finishDriveRestore() {
+  reviewedFile = undefined
   paused = false
   schedule()
+}
+
+export async function completeDriveRestore() {
+  try {
+    if (reviewedFile) {
+      const settings = await accountSettings()
+      if (daily(reviewedFile, backupDay())) {
+        const file = await client().file(reviewedFile.id)
+        if (file.headRevisionId !== reviewedFile.headRevisionId) throw new Error('Копия Drive изменилась во время восстановления. Выберите её повторно.')
+        await setMeta(accountKey(), { ...settings, folderId: FOLDER_ID, day: backupDay(), fileId: file.id, filePending: false, headRevision: file.headRevisionId, digest: undefined })
+        update({ reviewRequired: false, error: undefined })
+      }
+    }
+  } catch (error) { update({ reviewRequired: true }); report(error) }
+  finally { finishDriveRestore() }
+}
+
+async function finishRetention(drive: DriveClient, file: DriveFile, day: string, settings: AccountBackup, key: string, session: number) {
+  try {
+    if (await cleanupDailyBackups(drive, file, day, session)) {
+      if (session !== generation) return
+      settings.cleanupPending = false
+      await setMeta(key, settings)
+    }
+  } catch {
+    if (session === generation) update({ error: 'Новая копия сохранена. Не удалось завершить проверку старых копий; непроверенные файлы оставлены в Drive. Проверка повторится.' })
+  }
+}
+
+async function cleanupDailyBackups(drive: DriveClient, saved: DriveFile, day: string, session: number) {
+  const cutoff = retentionCutoff(day)
+  const files = await drive.backups(FOLDER_ID)
+  if (files.filter((file) => daily(file, day)).length > 1) {
+    update({ error: 'Найдены копии за один день с разных устройств. Файлы сохранены; выберите копию для объединения.' })
+    return false
+  }
+  for (const file of files) {
+    const date = file.appProperties?.day
+    if (file.id === saved.id || file.appProperties?.role !== 'daily' || !date ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= cutoff ||
+      file.name !== `financy-backup-${date}.json` || new Date(`${date}T12:00:00Z`).toISOString().slice(0, 10) !== date) continue
+    if (paused || session !== generation) return false
+    parseBackup(await drive.download(file.id))
+    const current = await drive.file(saved.id)
+    if (current.trashed || current.headRevisionId !== saved.headRevisionId) throw new Error('Новая копия изменилась. Очистка остановлена.')
+    if (paused || session !== generation) return false
+    await drive.trashDaily(file, cutoff)
+  }
+  return true
 }
 
 export const driveConfigured = !!GOOGLE_CLIENT_ID
