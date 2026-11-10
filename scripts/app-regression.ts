@@ -13,6 +13,7 @@ import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
 import { incomeSources } from '../src/lib/income-sources'
+import { financials, savePlan } from '../src/lib/planning'
 
 const wait = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -45,7 +46,21 @@ async function closeSheet() {
 export async function runAppRegression() {
   const failures: string[] = []
   window.addEventListener('unhandledrejection', (event) => failures.push(String(event.reason)))
+  // Upgrade a genuine v1 database in this fresh profile, including an existing sync setting.
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('finance', 1)
+    request.onupgradeneeded = () => {
+      const d = request.result
+      d.createObjectStore('operations', { keyPath: 'id' }).createIndex('date', 'date')
+      d.createObjectStore('clients', { keyPath: 'id' }); d.createObjectStore('categories', { keyPath: 'id' })
+      const h = d.createObjectStore('history', { keyPath: 'id' }); h.createIndex('entityId', 'entityId'); h.createIndex('at', 'at')
+      d.createObjectStore('meta')
+    }
+    request.onsuccess = () => { const d = request.result; const tx = d.transaction('meta', 'readwrite'); tx.objectStore('meta').put('synthetic-preserved-setting', 'migration-proof'); tx.oncomplete = () => { d.close(); resolve() } }
+    request.onerror = () => reject(request.error)
+  })
   await initStore()
+  check((await DB.db()).version === 2 && await DB.getMeta('migration-proof') === 'synthetic-preserved-setting', 'v1 upgrade lost settings')
   for (const [text, cents] of [['1 234,56', 123456], ['0,01', 1], ['12.50', 1250], ['0', null], ['1.2.3', null], ['12abc', null], ['1,234', null], ['999999999999999999', null]] as const) {
     check(textToCents(text) === cents, `Incorrect amount ${text}`)
   }
@@ -113,12 +128,13 @@ export async function runAppRegression() {
   await actions.wipeAll() // Only this isolated test database is reset.
   createRoot(document.getElementById('root')!).render(createElement(App))
   await until(() => !!document.querySelector('main'))
-  check(document.querySelectorAll('nav button').length === 4 && !document.querySelector('button[aria-label="Добавить операцию"]'), 'Bottom navigation still has central add button')
+  check(document.querySelectorAll('nav button').length === 5 && !document.querySelector('button[aria-label="Добавить операцию"]'), 'Bottom navigation still has central add button')
   await click('Расход')
   check(!document.querySelector('[role="dialog"] input') && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? ''), 'Expense chooser opens a keyboard or form')
   await click('Вручную')
   await input('input[aria-label="Название"]', 'Synthetic UI')
   await input('input[aria-label="Сумма"]', '12,34')
+  await click('Продукты')
   const saveButton = button('Сохранить расход')
   saveButton.click(); saveButton.click()
   await until(() => !document.querySelector('[role="dialog"]'))
@@ -182,17 +198,17 @@ export async function runAppRegression() {
   await click('Расход'); await click('Вручную'); await click('Назад')
   check(button('Камера') && button('Из фото') && button('Вручную'), 'Expense back navigation failed')
   await click('Назад')
-  console.log('PASS income/expense entry, four-tab navigation, keyboard-free chooser, saved-source threshold/filter/selection, back and double-tap protection')
+  console.log('PASS income/expense entry, five-tab navigation, keyboard-free chooser, saved-source threshold/filter/selection, back and double-tap protection')
 
   // Income form: switch, three categories, searchable client picker, optional client/note.
   const visibleIncomeCats = getState().categories.filter((c) => c.type === 'income' && !c.archived).map((c) => c.name)
   check(JSON.stringify(visibleIncomeCats) === JSON.stringify(['Работа', 'Прочие доходы', 'Разовый клиент']), `Income categories are ${visibleIncomeCats.join(', ')}`)
   check(getState().categories.some((c) => c.id === 'c-photo' && c.archived && !c.deletedAt), 'Old «Съёмки» category was removed instead of hidden')
   await click('Доход')
-  for (const label of ['Работа', 'Съёмки', 'Разовый доход']) check(button(label), `Income switch option ${label} missing`)
+  check(!document.querySelector('input[placeholder="Заметка"]') && !document.querySelector('[role="dialog"]')!.textContent!.includes('Съёмки'), 'Creation still contains obsolete switch or note')
   const catLabels = [...document.querySelectorAll('[role="dialog"] .grid-cols-3 button span')].map((node) => node.textContent)
   check(JSON.stringify(catLabels) === JSON.stringify(['Работа', 'Прочие доходы', 'Разовый клиент']), `Income category grid shows ${catLabels.join(', ')}`)
-  await click('Съёмки')
+  await click('Прочие доходы')
   await input('input[aria-label="Сумма"]', '75')
   await input('input[aria-label="Название"]', 'Synthetic shoot')
   await click('Выбрать клиента')
@@ -208,8 +224,8 @@ export async function runAppRegression() {
   const created = getState().clients.find((c) => c.name === 'Synthetic new client')
   check(created && document.querySelector('[aria-label="Выбрать клиента"]')?.textContent?.includes('Synthetic new client'), 'New client was not created and selected')
   await click('Сохранить доход'); await until(() => !document.querySelector('[role="dialog"]'))
-  const shoot = getState().operations.find((o) => o.title === 'Synthetic shoot')
-  check(shoot && shoot.incomeKind === 'shoot' && shoot.clientId === created!.id && shoot.amount === 7500 && !shoot.note, 'Income with switch/client saved incorrectly')
+  const shoot = getState().operations.find((o) => o.title === 'Synthetic new client')
+  check(shoot && shoot.categoryId === 'c-other-in' && shoot.clientId === created!.id && shoot.amount === 7500 && !shoot.note, 'Income with switch/client saved incorrectly')
   await click('Доход')
   await input('input[aria-label="Сумма"]', '5')
   await input('input[aria-label="Название"]', 'Synthetic no client')
@@ -244,7 +260,7 @@ export async function runAppRegression() {
     await initStore()
     check(getState().categories.filter((c) => c.id === 'c-oneoff').length === 1, 'Migration not idempotent')
   }
-  console.log('PASS income switch, exactly three income categories, hidden legacy category, client search/add/dedupe/select, optional client and note')
+  console.log('PASS simplified income, exactly three income categories, hidden legacy category, client search/add/dedupe/select, optional client and note')
 
   toast('Synthetic persistent update', { label: 'Synthetic update', run: () => false }, 0)
   toast('Synthetic transient', undefined, 20); await wait(60)
@@ -287,6 +303,55 @@ export async function runAppRegression() {
   receipt.width = receipt.height = 0
   console.log('PASS gallery file selection, actual local OCR and editing recognized amount before save')
   console.log('PASS persistent update prompt, bounded photo processing, recognition cancellation, direct gallery picker and camera cleanup')
+
+  await click('Планирование', document.querySelector('nav')!)
+  const operationCount = getState().operations.length
+  await click('Настроить баланс')
+  await input('input[aria-label="Фактический баланс"]', '1000')
+  await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(financials(getState().operations, getState().planning).balance === 100000 && getState().operations.length === operationCount, 'Balance checkpoint manufactured an operation')
+  await click('Настроить баланс'); await input('input[aria-label="Фактический баланс"]', '950')
+  await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().planning.filter((r) => r.kind === 'balance').length === 2, 'Manual correction overwrote balance history')
+  await click('Конверт'); await input('input[aria-label="Название конверта"]', 'Synthetic rent')
+  await input('input[aria-label="Сумма конверта"]', '750'); await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  await click('Управлять резервом'); await input('input[aria-label="Сумма движения"]', '750')
+  const reserveButton = button('Сохранить'); reserveButton.click(); reserveButton.click()
+  await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().planning.filter((r) => r.kind === 'movement').length === 1 && financials(getState().operations, getState().planning).reserved === 0, 'Offline reserve was duplicated or confirmed without PC')
+  const planned = await backup.buildBackup()
+  check(backup.parseBackup(JSON.stringify(planned)).planning?.length === 4, 'Planning backup roundtrip lost records')
+  const { planning: _planning, ...legacyBackup } = planned
+  await backup.restore(backup.parseBackup(JSON.stringify({ ...legacyBackup, version: 1 })), 'replace')
+  check(getState().planning.length === 4, 'Legacy replacement cleared planning')
+  await actions.reload()
+  check(getState().planning.length === 4 && getState().operations.length === operationCount, 'Planning reload lost financial data')
+  // A confirmed reserve restored on a new device must be rechecked, not blindly authorized.
+  const movement = planned.planning!.find((r) => r.kind === 'movement')!
+  await backup.restore({ ...planned, planning: [{ ...movement, id: 'synthetic-imported-reserve', status: 'confirmed', updatedAt: new Date().toISOString() }] }, 'merge')
+  check(getState().planning.find((r) => r.id === 'synthetic-imported-reserve')?.status === 'pending', 'Imported reserve bypassed server validation')
+  await savePlan({ kind: 'settings', id: 'planning-settings', auto: true })
+  console.log('PASS v1→v2 non-destructive upgrade, manual balance history, planning UI, provisional reserve double-tap guard, reload, v1/v2 backup compatibility')
+
+  await click('Главная', document.querySelector('nav')!)
+  await click('Доход'); await input('input[aria-label="Сумма"]', '5,50')
+  check(!document.querySelector('input[placeholder="Заметка"]'), 'New income still has note input')
+  await click('Сохранить доход'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().operations.some((o) => o.type === 'income' && o.amount === 550 && o.title === '' && o.categoryId === 'c-work'), 'Optional income source or default category failed')
+  await click('Расход'); await click('Вручную'); await input('input[aria-label="Название"]', 'Lidl')
+  check(button('Продукты').getAttribute('aria-pressed') === 'true', 'Known merchant category not suggested')
+  await click('Кафе'); await input('input[aria-label="Название"]', 'Mercadona')
+  check(button('Кафе').getAttribute('aria-pressed') === 'true', 'Automatic category overrode a manual choice')
+  await input('input[aria-label="Название"]', ''); await input('input[aria-label="Сумма"]', '25')
+  await click('Сохранить расход'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().operations.some((o) => o.type === 'expense' && o.amount === 2500 && o.title === 'Кафе'), 'Optional recipient did not fall back to category name')
+  console.log('PASS anonymous income, default category, optional recipient, local category hints and manual override priority')
+  const recurring = getState().planning.find((r) => r.kind === 'envelope')!
+  actions.addOperation({ ...draft('Synthetic paid period', recurring.target!), planningPayment: { envelopeId: recurring.id, reserved: 0, period: recurring.due } }); await waitForWrites()
+  await savePlan({ ...recurring, target: recurring.target! + 5000 })
+  const revised = getState().planning.find((r) => r.id === recurring.id)!
+  check(revised.due! > recurring.due! && revised.terms?.[0]?.target === recurring.target, 'Changing recurring amount reopened an already paid period')
+  console.log('PASS recurring amount changes preserve already-paid period terms')
 
   const start = performance.now()
   const seed: Operation[] = Array.from({ length: 10000 }, (_, index) => ({

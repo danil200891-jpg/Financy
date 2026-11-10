@@ -111,7 +111,7 @@ export function OpRow({ op, cat, client, onClick, showDate }: {
     <button onClick={onClick} className="press flex w-full items-center gap-3.5 px-4 py-3 text-left">
       {client ? <Avatar client={client} /> : <CategoryIcon cat={cat} />}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[16px] font-medium">{op.title}</p>
+        <p className="truncate text-[16px] font-medium">{op.title || cat?.name || (income ? 'Доход' : 'Расход')}</p>
         <p className="truncate text-[13px] text-mist">
           {cat?.name ?? 'Без категории'}
           {showDate ? `, ${dayLabel(op.date).toLowerCase()}` : `, ${timeLabel(op.date)}`}
@@ -199,7 +199,8 @@ export function PrimaryButton({ children, onClick, disabled, className = '' }: {
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`press h-14 w-full rounded-[18px] bg-[linear-gradient(120deg,#7c8cff,#9f6bff)] text-[17px] font-semibold text-white shadow-[0_10px_30px_-10px_rgba(124,140,255,0.8)] disabled:opacity-40 ${className}`}
+      style={{ background: 'linear-gradient(120deg,rgba(124,140,255,.65),rgba(159,107,255,.5))' }}
+      className={`glass press h-14 w-full rounded-[18px] text-[17px] font-semibold text-white shadow-[0_10px_30px_-10px_rgba(124,140,255,0.45)] disabled:opacity-65 ${className}`}
     >
       {children}
     </button>

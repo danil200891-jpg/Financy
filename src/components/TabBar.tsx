@@ -1,11 +1,12 @@
-import { BarChart3, Clock3, House, Users } from 'lucide-react'
+import { BarChart3, Clock3, House, Users, Wallet } from 'lucide-react'
 
-export type Tab = 'home' | 'history' | 'clients' | 'analytics'
+export type Tab = 'home' | 'history' | 'clients' | 'analytics' | 'planning'
 
 const TABS: { id: Tab; label: string; Icon: typeof House }[] = [
   { id: 'home', label: 'Главная', Icon: House },
   { id: 'history', label: 'История', Icon: Clock3 },
   { id: 'clients', label: 'Клиенты', Icon: Users },
+  { id: 'planning', label: 'Планирование', Icon: Wallet },
   { id: 'analytics', label: 'Аналитика', Icon: BarChart3 },
 ]
 
@@ -16,11 +17,12 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
       <button
         key={t.id}
         onClick={() => onTab(t.id)}
-        className={`press flex flex-1 flex-col items-center gap-1 pt-2 pb-1 transition-colors ${active ? 'text-ink' : 'text-fog'}`}
+        aria-label={t.label}
+        className={`press flex min-h-[64px] min-w-0 flex-1 flex-col items-center gap-1 pt-2 pb-1 transition-colors ${active ? 'text-ink' : 'text-fog'}`}
         aria-current={active ? 'page' : undefined}
       >
         <t.Icon size={24} strokeWidth={active ? 2.2 : 1.8} />
-        <span className="text-[11px] font-medium">{t.label}</span>
+        <span className="max-w-full whitespace-nowrap px-0.5 text-[10px] leading-tight font-medium">{t.id === 'planning' ? 'Планы' : t.label}</span>
       </button>
     )
   }

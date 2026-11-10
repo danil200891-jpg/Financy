@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { financials, nextPaymentPeriod } from '../lib/planning'
 import { AlertTriangle, CalendarDays, Check, ChevronDown, Plus, Search, UserRound } from 'lucide-react'
 import type { IncomeKind, Operation, OpType } from '../lib/types'
-import { actions, findClientByName, findDuplicate, useStore, waitForWrites, type OperationDraft } from '../lib/store'
+import { actions, findClientByName, findDuplicate, getState, useStore, waitForWrites, type OperationDraft } from '../lib/store'
 import { dayLabel, fmt, toDateInput } from '../lib/format'
 import { normalize } from '../lib/parse'
 import { Avatar, CategoryIcon, Segmented, Sheet } from './ui'
@@ -29,6 +30,7 @@ export interface FormValue {
   note: string
   currency?: string
   incomeKind?: IncomeKind
+  planningPayment?: Operation['planningPayment']
 }
 
 export const centsToText = (c: number | null) => (c == null ? '' : (c / 100).toFixed(2).replace('.', ',').replace(/,00$/, ''))
@@ -39,9 +41,11 @@ export const textToCents = (t: string) => {
   return Number.isSafeInteger(cents) && cents > 0 ? cents : null
 }
 
-export function toDraft(v: FormValue, source: OperationDraft['source'], keepTime?: string): OperationDraft | null {
+export function toDraft(v: FormValue, source: OperationDraft['source'], keepTime?: string, creating = false): OperationDraft | null {
   const amount = textToCents(v.amountText)
-  if (!amount || !v.title.trim()) return null
+  if (!amount || (creating && v.type === 'expense' && !v.categoryId)) return null
+  const category = getState().categories.find((c) => c.id === v.categoryId)
+  const title = v.title.trim() || (v.type === 'expense' ? category?.name ?? '' : '')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) return null
   const time = keepTime ? new Date(keepTime) : new Date()
   const [y, m, d] = v.date.split('-').map(Number)
@@ -50,8 +54,9 @@ export function toDraft(v: FormValue, source: OperationDraft['source'], keepTime
   if (time.getFullYear() !== y || time.getMonth() !== m - 1 || time.getDate() !== d) return null
   const date = time.toISOString()
   return {
-    type: v.type, amount, currency: v.currency ?? 'EUR', title: v.title.trim(), categoryId: v.categoryId,
+    type: v.type, amount, currency: v.currency ?? 'EUR', title, categoryId: v.categoryId,
     clientId: v.type === 'income' ? v.clientId : null, date, note: v.note.trim() || undefined, source,
+    ...(v.planningPayment && v.type === 'expense' ? { planningPayment: { ...v.planningPayment, reserved: Math.min(amount, v.planningPayment.reserved) } } : {}),
     ...(v.type === 'income' ? { incomeKind: v.incomeKind ?? 'work' } : {}),
   }
 }
@@ -71,6 +76,10 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
 }) {
   const cats = useStore((s) => s.categories)
   const operations = useStore((s) => s.operations)
+  const planning = useStore((s) => s.planning)
+  const manualCategory = useRef(false)
+  useEffect(() => { manualCategory.current = false }, [ignoreId, value.type])
+  const available = financials(operations.filter((o) => o.id !== ignoreId), planning)
   const set = (p: Partial<FormValue>) => onChange({ ...value, ...p })
   const income = value.type === 'income'
   const sources = useMemo(() => income && suggestSources ? incomeSources(operations, value.title).slice(0, 8) : [], [operations, value.title, income, suggestSources])
@@ -94,7 +103,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         {flag('type')}
       </div>}
 
-      {income && (
+      {income && !fixedType && (
         <Segmented value={value.incomeKind ?? 'work'} onChange={(incomeKind) => set({ incomeKind })} options={INCOME_KINDS} />
       )}
 
@@ -104,7 +113,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
           <input
             inputMode="decimal"
             value={value.amountText}
-            onChange={(e) => set({ amountText: e.target.value.replace(/[^\d.,\s]/g, '') })}
+            onChange={(e) => { const amountText = e.target.value.replace(/[^\d.,\s]/g, ''); set({ amountText, ...(!ignoreId && value.planningPayment ? { planningPayment: { ...value.planningPayment, reserved: Math.min(textToCents(amountText) ?? 0, available.reserves[value.planningPayment.envelopeId] ?? 0) } } : {}) }) }}
             placeholder="0"
             aria-label="Сумма"
             className="num w-[min(70vw,260px)] bg-transparent text-center !text-[52px] leading-none outline-none placeholder:text-white/20"
@@ -117,7 +126,12 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
       <div>
         <input
           value={value.title}
-          onChange={(e) => set({ title: e.target.value })}
+          onChange={(e) => {
+            const title = e.target.value
+            const rules: [RegExp, string][] = [[/lidl|mercadona|carrefour|aldi|пят[её]рочка|магнит/i, 'c-food'], [/starbucks|кафе|cafe|restaurant|mcdonald/i, 'c-cafe']]
+            const guess = rules.find(([pattern]) => pattern.test(title))?.[1]
+            set({ title, ...(!income && !manualCategory.current ? { categoryId: cats.some((c) => c.id === guess && !c.deletedAt) ? guess! : null } : {}) })
+          }}
           placeholder={income ? 'Источник дохода' : 'Магазин или получатель'}
           aria-label="Название"
           autoComplete="off"
@@ -132,7 +146,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         </div>}
       </div>
 
-      {income && <ClientField value={value.clientId} onChange={(clientId) => set({ clientId })} />}
+      {income && <ClientField value={value.clientId} onChange={(clientId) => set({ clientId, title: clientId ? getState().clients.find((c) => c.id === clientId)?.name ?? '' : value.title })} />}
 
       <div>
         <p className="mb-2 px-1 text-[14px] text-mist">Категория</p>
@@ -142,7 +156,9 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
             return (
               <button
                 key={c.id}
-                onClick={() => set({ categoryId: on ? null : c.id })}
+                aria-pressed={on}
+                style={{ background: on ? 'rgba(124,140,255,.17)' : 'rgba(255,255,255,.025)', border: `1px solid ${on ? 'rgba(124,140,255,.4)' : 'rgba(255,255,255,.06)'}` }}
+                onClick={() => { manualCategory.current = true; set({ categoryId: !income && on ? null : c.id }) }}
                 className={`press flex flex-col items-center gap-1.5 rounded-2xl py-2.5 transition-colors ${on ? 'bg-white/12 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]' : ''}`}
               >
                 <CategoryIcon cat={c} size={40} />
@@ -153,13 +169,26 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         </div>
       </div>
 
+      {!income && (value.currency ?? 'EUR') === 'EUR' && planning.some((r) => r.kind === 'envelope') && <label className="block space-y-2 text-[14px] text-mist">Оплата из резерва
+        <select aria-label="Оплата из резерва" value={value.planningPayment?.envelopeId ?? ''} onChange={(event) => {
+          const id = event.target.value
+          const envelope = planning.find((r) => r.id === id)
+          const period = envelope?.mode === 'obligation' ? nextPaymentPeriod(envelope, operations.filter((o) => o.id !== ignoreId)) : undefined
+          set({ planningPayment: id ? { envelopeId: id, reserved: Math.min(textToCents(value.amountText) ?? 0, available.reserves[id] ?? 0), period } : undefined })
+        }} className="glass h-12 w-full rounded-2xl px-3">
+          <option value="">Без использования резерва</option>
+          {planning.filter((r) => r.kind === 'envelope' && ((available.reserves[r.id] ?? 0) > 0 || r.id === value.planningPayment?.envelopeId)).map((r) => <option key={r.id} value={r.id}>{r.name} · {fmt(available.reserves[r.id] ?? 0)}</option>)}
+        </select>
+        {value.planningPayment && <span className="block text-[13px]">Из резерва: {fmt(Math.min(value.planningPayment.reserved, textToCents(value.amountText) ?? 0))}. Это один реальный расход.{value.planningPayment.period ? ` Платёжный период: ${value.planningPayment.period}.` : ''}</span>}
+      </label>}
+
       <div className="grid grid-cols-[1fr_auto] gap-2">
-        <input
+        {!fixedType && <input
           value={value.note}
           onChange={(e) => set({ note: e.target.value })}
           placeholder="Заметка"
           className="glass h-12 min-w-0 rounded-2xl px-4 outline-none placeholder:text-fog"
-        />
+        />}
         <label className="glass relative flex h-12 items-center gap-2 rounded-2xl px-4 text-[15px]">
           <CalendarDays size={17} className="text-mist" />
           {Number.isFinite(Date.parse(value.date + 'T12:00:00')) ? dayLabel(value.date + 'T12:00:00') : 'Выберите дату'}

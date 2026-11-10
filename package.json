@@ -16,8 +16,9 @@
     "check": "tsc -b",
     "test:app": "node scripts/test-app.mjs",
     "test:preview": "node scripts/test-preview.mjs",
+    "test:update": "node scripts/test-update.mjs",
     "prepare": "git config core.hooksPath .githooks || true",
-    "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs",
+    "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs sync-server/test/planning.test.mjs",
     "sync-server": "node sync-server/server.mjs",
     "test:sync": "node scripts/test-sync.mjs"
   },
