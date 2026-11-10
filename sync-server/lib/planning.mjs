@@ -3,6 +3,7 @@ const live = (record) => !record.deletedAt
 const euro = (operation) => !operation.currency || operation.currency.toUpperCase() === 'EUR'
 const cents = (n) => Number.isSafeInteger(n)
 const date = (s) => typeof s === 'string' && Number.isFinite(Date.parse(s))
+const dayDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s ?? '') && date(s) && new Date(s).toISOString().slice(0, 10) === s
 export const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 export function validPlanning(r) {
@@ -14,7 +15,9 @@ export function validPlanning(r) {
   if (r.kind === 'envelope') return typeof r.name === 'string' && !!r.name.trim() && r.name.length <= 200 && cents(r.target) && r.target > 0 &&
     ['goal', 'obligation'].includes(r.mode) && ['active', 'paused', 'closed'].includes(r.state) && Number.isInteger(r.priority) && r.priority >= 0 && r.priority <= 999 &&
     ['once', 'monthly', 'quarterly', 'yearly'].includes(r.frequency) && (r.mode !== 'obligation' || !!r.due) &&
-    (!r.due || (/^\d{4}-\d{2}-\d{2}$/.test(r.due) && date(r.due) && new Date(r.due).toISOString().slice(0, 10) === r.due))
+    (!r.due || dayDate(r.due)) &&
+    (r.scheduleDay === undefined || (Number.isInteger(r.scheduleDay) && r.scheduleDay >= 1 && r.scheduleDay <= 31)) &&
+    (r.terms === undefined || (Array.isArray(r.terms) && r.terms.length <= 1000 && r.terms.every((t, i) => dayDate(t.due) && dayDate(t.until) && t.until >= t.due && t.until < (r.terms[i + 1]?.due ?? r.due) && cents(t.target) && t.target > 0 && ['once', 'monthly', 'quarterly', 'yearly'].includes(t.frequency) && (t.scheduleDay === undefined || (Number.isInteger(t.scheduleDay) && t.scheduleDay >= 1 && t.scheduleDay <= 31)))))
   return false
 }
 
@@ -53,7 +56,7 @@ export function duePeriods(envelope, through) {
   for (let i = 0; i < 1200; i++) {
     const d = new Date(Date.UTC(year, month - 1 + i * step, 1, 12))
     const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()
-    d.setUTCDate(Math.min(day, last))
+    d.setUTCDate(Math.min(envelope.scheduleDay ?? day, last))
     const key = d.toISOString().slice(0, 10)
     if (key > through) break
     out.push(key)
@@ -65,17 +68,22 @@ export function duePeriods(envelope, through) {
 export function obligations(operations, planning, now = new Date()) {
   const end = localDay(new Date(now.getFullYear(), now.getMonth() + 1, 0))
   return planning.filter((r) => live(r) && r.kind === 'envelope' && r.mode === 'obligation' && r.state === 'active').flatMap((envelope) =>
-    duePeriods(envelope, end).map((period) => {
+    periodTerms(envelope, end).map(({ period, target }) => {
       const paid = operations.filter((o) => live(o) && euro(o) && o.type === 'expense' && Date.parse(o.date) <= +now && o.planningPayment?.envelopeId === envelope.id && o.planningPayment.period === period).reduce((sum, o) => sum + o.amount, 0)
-      return { envelope, period, paid, missing: Math.max(0, envelope.target - paid) }
+      return { envelope, period, paid, missing: Math.max(0, target - paid) }
     }).filter((p) => p.missing > 0))
 }
 
 export function nextPaymentPeriod(envelope, operations, now = new Date()) {
   const through = localDay(new Date(now.getFullYear() + 2, 11, 31))
-  const periods = duePeriods(envelope, through)
-  return periods.find((period) => operations.filter((o) => live(o) && euro(o) && o.type === 'expense' && Date.parse(o.date) <= +now && o.planningPayment?.envelopeId === envelope.id && o.planningPayment.period === period).reduce((sum, o) => sum + o.amount, 0) < envelope.target)
+  const periods = periodTerms(envelope, through)
+  return periods.find(({ period, target }) => operations.filter((o) => live(o) && euro(o) && o.type === 'expense' && Date.parse(o.date) <= +now && o.planningPayment?.envelopeId === envelope.id && o.planningPayment.period === period).reduce((sum, o) => sum + o.amount, 0) < target)?.period
     ?? (envelope.due > through ? envelope.due : undefined)
+}
+
+function periodTerms(envelope, through) {
+  const old = (envelope.terms ?? []).flatMap((term) => duePeriods({ ...envelope, ...term }, term.until < through ? term.until : through).map((period) => ({ period, target: term.target })))
+  return [...old, ...duePeriods(envelope, through).map((period) => ({ period, target: envelope.target }))]
 }
 
 export function distribution(operations, planning, now = new Date()) {

@@ -62,6 +62,15 @@ test('allocation prioritizes obligations then cushion and goals, without using p
   assert(movementError([], [anchor, envelope], event('overdraft', 1, 'rent', null), now))
   assert(!validPlanning({ ...envelope, target: -1 }))
 })
+test('new recurring terms do not reopen paid historical periods or change overdue costs', () => {
+  const changed = { ...envelope, target: 80000, due: '2026-12-20', terms: [{ due: '2026-11-20', frequency: 'monthly', target: 75000, until: '2026-12-19' }] }
+  const december = new Date('2026-12-10T12:00:00Z')
+  const paid = obligations([payment], [changed], december)
+  assert.deepEqual(paid.map((p) => [p.period, p.missing]), [['2026-12-20', 80000]])
+  const unpaid = obligations([], [changed], december)
+  assert.deepEqual(unpaid.map((p) => [p.period, p.missing]), [['2026-11-20', 75000], ['2026-12-20', 80000]])
+  assert(validPlanning(changed))
+})
 test('server serializes reservations, rejects stale/insufficient commands and deduplicates retries', () => {
   let db = applyPush(emptyDb('test'), 'phone', [change(anchor, 0, 'planning'), change(envelope, 0, 'planning')], now.toISOString()).db
   const pending = event('command-1', 75000, null, 'rent', 'pending')

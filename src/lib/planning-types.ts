@@ -11,6 +11,8 @@ export interface PlanningRecord {
   target?: number
   mode?: 'goal' | 'obligation'
   frequency?: 'once' | 'monthly' | 'quarterly' | 'yearly'
+  scheduleDay?: number
+  terms?: { due: string; frequency: 'once' | 'monthly' | 'quarterly' | 'yearly'; target: number; until: string; scheduleDay?: number }[]
   due?: string
   priority?: number
   categoryId?: string | null
