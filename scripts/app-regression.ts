@@ -12,8 +12,9 @@ import { parseRecognized } from '../src/lib/receipt'
 import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
+import { smoothSegments, smoothPath } from '../src/lib/sparkline'
 import { incomeSources } from '../src/lib/income-sources'
-import { financials, savePlan } from '../src/lib/planning'
+import { financials, savePlan, savePlanWithReserve } from '../src/lib/planning'
 
 const wait = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -61,6 +62,20 @@ export async function runAppRegression() {
   })
   await initStore()
   check((await DB.db()).version === 2 && await DB.getMeta('migration-proof') === 'synthetic-preserved-setting', 'v1 upgrade lost settings')
+  for (const series of [[0, 0, 0, 100], [10, 5, 20, 20, -30], [1, 1], [0, 50, 0, 50]]) {
+    const points = series.map((value, index) => [index * 10, value] as [number, number])
+    check(smoothPath(points).includes(' C'), 'Sparkline has no smooth curve')
+    for (const { start, c1, c2, end } of smoothSegments(points)) {
+      let previous = start[1]
+      for (let i = 1; i <= 100; i++) {
+        const t = i / 100, u = 1 - t
+        const y = u ** 3 * start[1] + 3 * u ** 2 * t * c1[1] + 3 * u * t ** 2 * c2[1] + t ** 3 * end[1]
+        check(y >= Math.min(start[1], end[1]) - 1e-8 && y <= Math.max(start[1], end[1]) + 1e-8, 'Curve invented a financial peak')
+        check((end[1] >= start[1] ? y >= previous - 1e-8 : y <= previous + 1e-8), 'Curve reversed financial direction')
+        previous = y
+      }
+    }
+  }
   for (const [text, cents] of [['1 234,56', 123456], ['0,01', 1], ['12.50', 1250], ['0', null], ['1.2.3', null], ['12abc', null], ['1,234', null], ['999999999999999999', null]] as const) {
     check(textToCents(text) === cents, `Incorrect amount ${text}`)
   }
@@ -126,6 +141,19 @@ export async function runAppRegression() {
   console.log('PASS JSON compatibility, damaged-file rejection, idempotent merge, replacement/undo, CSV safety')
 
   await actions.wipeAll() // Only this isolated test database is reset.
+  await savePlan({ kind: 'balance', amount: 100000, at: new Date().toISOString() })
+  const beforeAtomic = JSON.stringify(await DB.backupSnapshot())
+  const planningPut = IDBObjectStore.prototype.put
+  IDBObjectStore.prototype.put = function (...args: Parameters<IDBObjectStore['put']>) {
+    if (this.name === 'planning' && args[0]?.kind === 'movement') { IDBObjectStore.prototype.put = planningPut; throw new DOMException('Synthetic plan quota', 'QuotaExceededError') }
+    return planningPut.apply(this, args)
+  }
+  let atomicFailed = false
+  try { await savePlanWithReserve({ kind: 'envelope', name: 'Synthetic atomic', mode: 'goal', frequency: 'once', target: 50000, priority: 1, state: 'active' }, 25000) } catch { atomicFailed = true }
+  IDBObjectStore.prototype.put = planningPut
+  check(atomicFailed && JSON.stringify(await DB.backupSnapshot()) === beforeAtomic, 'Plan/reserve failure persisted a partial transaction')
+  await actions.wipeAll()
+  console.log('PASS bounded smooth financial curve and atomic plan-plus-reserve rollback')
   createRoot(document.getElementById('root')!).render(createElement(App))
   await until(() => !!document.querySelector('main'))
   check(document.querySelectorAll('nav button').length === 5 && !document.querySelector('button[aria-label="Добавить операцию"]'), 'Bottom navigation still has central add button')
@@ -306,17 +334,19 @@ export async function runAppRegression() {
 
   await click('Планирование', document.querySelector('nav')!)
   const operationCount = getState().operations.length
-  await click('Настроить баланс')
+  await click('Указать фактический остаток')
   await input('input[aria-label="Фактический баланс"]', '1000')
   await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
   check(financials(getState().operations, getState().planning).balance === 100000 && getState().operations.length === operationCount, 'Balance checkpoint manufactured an operation')
-  await click('Настроить баланс'); await input('input[aria-label="Фактический баланс"]', '950')
+  await click('Настройки планирования'); await click('Настроить баланс'); await input('input[aria-label="Фактический баланс"]', '950')
   await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
   check(getState().planning.filter((r) => r.kind === 'balance').length === 2, 'Manual correction overwrote balance history')
-  await click('Конверт'); await input('input[aria-label="Название конверта"]', 'Synthetic rent')
-  await input('input[aria-label="Сумма конверта"]', '750'); await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
-  await click('Управлять резервом'); await input('input[aria-label="Сумма движения"]', '750')
-  const reserveButton = button('Сохранить'); reserveButton.click(); reserveButton.click()
+  check(!document.querySelector('main input[type="checkbox"]') && !document.querySelector('main')!.textContent!.includes('Хватит ли денег'), 'Planning main remains overloaded')
+  await click('Добавить план'); await input('input[aria-label="Название плана"]', 'Synthetic rent')
+  await input('input[aria-label="Нужный бюджет"]', '750'); await input('input[aria-label="Зарезервировать сейчас"]', '9999')
+  check([...document.querySelectorAll('button')].some((b) => b.textContent === 'Создать план' && b.disabled), 'Unaffordable reserve enabled creation')
+  await input('input[aria-label="Зарезервировать сейчас"]', '750')
+  const reserveButton = button('Создать план'); reserveButton.click(); reserveButton.click()
   await until(() => !document.querySelector('[role="dialog"]'))
   check(getState().planning.filter((r) => r.kind === 'movement').length === 1 && financials(getState().operations, getState().planning).reserved === 0, 'Offline reserve was duplicated or confirmed without PC')
   const planned = await backup.buildBackup()
@@ -352,6 +382,47 @@ export async function runAppRegression() {
   const revised = getState().planning.find((r) => r.id === recurring.id)!
   check(revised.due! > recurring.due! && revised.terms?.[0]?.target === recurring.target, 'Changing recurring amount reopened an already paid period')
   console.log('PASS recurring amount changes preserve already-paid period terms')
+
+  await savePlan({ kind: 'balance', amount: 500000, at: new Date().toISOString() })
+  await click('Планирование', document.querySelector('nav')!)
+  const beforeSimple = getState().operations.length
+  await click('Добавить план')
+  await input('input[aria-label="Название плана"]', 'Synthetic simple plan')
+  await input('input[aria-label="Нужный бюджет"]', '800')
+  await input('input[aria-label="Зарезервировать сейчас"]', '500')
+  check(document.querySelector('[role="dialog"]')!.textContent!.includes('Останется свободно'), 'Missing live budget preview')
+  await click('Создать план'); await until(() => !document.querySelector('[role="dialog"]'))
+  const simple = getState().planning.find((r) => r.name === 'Synthetic simple plan')!
+  const firstReserve = getState().planning.find((r) => r.kind === 'movement' && r.to === simple.id)!
+  actions.savePlanning({ ...firstReserve, status: 'confirmed' }); await waitForWrites()
+  await click('Открыть план Synthetic simple plan')
+  await input('input[aria-label="Зарезервировать сейчас"]', '600')
+  await click('Сохранить изменения'); await until(() => !document.querySelector('[role="dialog"]'))
+  const increase = getState().planning.find((r) => r.kind === 'movement' && r.to === simple.id && r.id !== firstReserve.id)!
+  check(increase.amount === 10000, 'Reserve edit created full amount instead of delta')
+  actions.savePlanning({ ...increase, status: 'confirmed' }); await waitForWrites()
+  const freeBeforeDecrease = financials(getState().operations, getState().planning).free
+  await click('Открыть план Synthetic simple plan')
+  await input('input[aria-label="Зарезервировать сейчас"]', '450')
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1)
+  await input('input[aria-label="Дата платежа"]', toDraft({ ...emptyForm(), amountText: '1', title: 'Synthetic', date: [tomorrow.getFullYear(), String(tomorrow.getMonth() + 1).padStart(2, '0'), String(tomorrow.getDate()).padStart(2, '0')].join('-') }, 'manual')!.date.slice(0, 10))
+  await input('input[aria-label="Нужный бюджет"]', '900')
+  await click('Сохранить изменения'); await until(() => !document.querySelector('[role="dialog"]'))
+  const decrease = getState().planning.find((r) => r.kind === 'movement' && r.from === simple.id)!
+  check(decrease.amount === 15000 && financials(getState().operations, getState().planning).free === freeBeforeDecrease, 'Pending release was spent before confirmation')
+  actions.savePlanning({ ...decrease, status: 'confirmed' }); await waitForWrites()
+  check(financials(getState().operations, getState().planning).reserves[simple.id] === 45000 && financials(getState().operations, getState().planning).free === freeBeforeDecrease! + 15000, 'Reserve reduction did not release exactly the delta')
+  check(getState().planning.find((r) => r.id === simple.id)?.target === 90000, 'Budget edit was lost')
+  await click('Открыть план Synthetic simple plan')
+  const confirm = window.confirm; window.confirm = () => true
+  await click('Удалить план'); await until(() => !document.querySelector('[role="dialog"]'))
+  window.confirm = confirm
+  check(getState().planning.find((r) => r.id === simple.id)?.state === 'closed' && getState().operations.length === beforeSimple, 'Closing plan deleted financial data')
+  const release = getState().planning.find((r) => r.kind === 'movement' && r.from === simple.id && r.status === 'pending')!
+  check(release.amount === 45000, 'Deleting plan did not request exact remaining reserve release')
+  actions.savePlanning({ ...release, status: 'confirmed' }); await waitForWrites()
+  check(financials(getState().operations, getState().planning).reserves[simple.id] === 0 && !document.querySelector('main')!.textContent!.includes('Synthetic simple plan'), 'Closed empty plan did not move to archive')
+  console.log('PASS simple-plan create, live budget, reserve increase/reduction, date/budget edit, safe deletion and archive; no financial operations manufactured')
 
   const start = performance.now()
   const seed: Operation[] = Array.from({ length: 10000 }, (_, index) => ({

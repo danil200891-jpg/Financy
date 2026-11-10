@@ -17,7 +17,7 @@ export function validPlanning(r) {
     ['once', 'monthly', 'quarterly', 'yearly'].includes(r.frequency) && (r.mode !== 'obligation' || !!r.due) &&
     (!r.due || dayDate(r.due)) &&
     (r.scheduleDay === undefined || (Number.isInteger(r.scheduleDay) && r.scheduleDay >= 1 && r.scheduleDay <= 31)) &&
-    (r.terms === undefined || (Array.isArray(r.terms) && r.terms.length <= 1000 && r.terms.every((t, i) => dayDate(t.due) && dayDate(t.until) && t.until >= t.due && t.until < (r.terms[i + 1]?.due ?? r.due) && cents(t.target) && t.target > 0 && ['once', 'monthly', 'quarterly', 'yearly'].includes(t.frequency) && (t.scheduleDay === undefined || (Number.isInteger(t.scheduleDay) && t.scheduleDay >= 1 && t.scheduleDay <= 31)))))
+    (r.terms === undefined || (Array.isArray(r.terms) && r.terms.length <= 1000 && r.terms.every((t, i) => dayDate(t.due) && dayDate(t.until) && t.until >= t.due && t.until < (r.terms[i + 1]?.due ?? r.due ?? '9999-12-31') && cents(t.target) && t.target > 0 && ['once', 'monthly', 'quarterly', 'yearly'].includes(t.frequency) && (t.scheduleDay === undefined || (Number.isInteger(t.scheduleDay) && t.scheduleDay >= 1 && t.scheduleDay <= 31)))))
   return false
 }
 

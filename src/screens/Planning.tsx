@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
-import { ArrowLeftRight, CalendarDays, History, Plus, Settings2, Target, Wallet } from 'lucide-react'
-import { Card, Empty, PrimaryButton, ScreenHeader, Sheet } from '../components/ui'
+import { CalendarDays, Plus, Settings2, Target, ChevronRight } from 'lucide-react'
+import { Card, PrimaryButton, Sheet } from '../components/ui'
 import { useStore } from '../lib/store'
-import { distribution, financials, localDay, obligations, projectedPlanning, reserve, savePlan, nextPaymentPeriod } from '../lib/planning'
+import { distribution, financials, localDay, obligations, projectedPlanning, reserve, savePlan, savePlanWithReserve, closePlan, nextPaymentPeriod } from '../lib/planning'
 import type { PlanningRecord } from '../lib/planning-types'
 import { fmt } from '../lib/format'
 import { textToCents } from '../components/OperationForm'
@@ -31,71 +31,118 @@ export function MoneySummary({ onSetup }: { onSetup: () => void }) {
   </Card>
 }
 
+const frequencies = { monthly: 'Каждый месяц', quarterly: 'Каждые 3 месяца', yearly: 'Каждый год', once: 'Однократно' }
+
 export function Planning() {
-  const planning = useStore((s) => s.planning)
+  const records = useStore((s) => s.planning)
   const operations = useStore((s) => s.operations)
+  const [editor, setEditor] = useState<{ record?: PlanningRecord } | null>(null)
+  const [settings, setSettings] = useState(false)
   const [modal, setModal] = useState<Modal | null>(null)
-  const sync = useSyncStatus()
-  const money = useMemo(() => financials(operations, planning), [operations, planning])
-  const due = useMemo(() => obligations(operations, planning), [operations, planning])
-  const needs = new Map<string, number>()
-  for (const period of due) needs.set(period.envelope.id, (needs.get(period.envelope.id) ?? 0) + period.missing)
-  const required = due.reduce((sum, p) => sum + p.missing, 0)
-  const funded = [...needs].reduce((sum, [id, need]) => sum + Math.min(need, money.reserves[id] ?? 0), 0)
-  const shortage = Math.max(0, required - funded - Math.max(0, money.free ?? 0))
-  const envelopes = planning.filter((r) => r.kind === 'envelope').sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
-  const goals = envelopes.filter((r) => r.mode === 'goal' && r.state === 'active')
-  const goalTarget = goals.reduce((sum, goal) => sum + (goal.target ?? 0), 0)
-  const goalSaved = goals.reduce((sum, goal) => sum + (money.reserves[goal.id] ?? 0), 0)
-  const automatic = planning.find((r) => r.kind === 'settings')?.auto ?? false
-  const alter = async (record: PlanningRecord, patch: Partial<PlanningRecord>) => {
-    try { await savePlan({ ...record, ...patch }); toast('Сохранено') } catch (error) { toast((error as Error).message) }
-  }
+  const money = useMemo(() => financials(operations, records), [operations, records])
+  const projected = useMemo(() => financials(operations, projectedPlanning()), [operations, records])
+  const envelopes = records.filter((r) => r.kind === 'envelope' && (r.state !== 'closed' || (money.reserves[r.id] ?? 0) > 0 || (projected.reserves[r.id] ?? 0) > 0)).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+  const tool = (value: Modal) => { setSettings(false); setEditor(null); setModal(value) }
   return <>
-    <ScreenHeader title="Планирование" />
-    <div className="space-y-4 px-4">
-      <MoneySummary onSetup={() => setModal({ kind: 'balance' })} />
-      <Card className="grid grid-cols-2 gap-3 p-4 text-[13px]"><div><p className="text-mist">К оплате до конца месяца</p><p className="num mt-1 font-semibold">{fmt(required)}</p></div><div><p className="text-mist">Прогресс активных целей</p><p className="num mt-1 font-semibold text-income">{fmt(goalSaved)} / {fmt(goalTarget)}</p><div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10"><div className="h-full bg-income transition-[width]" style={{ width: `${Math.min(100, goalTarget ? goalSaved / goalTarget * 100 : 0)}%` }} /></div></div></Card>
-      <p className="px-1 text-[13px] text-mist">{sync.planningSupported ? 'Резервы подтверждаются компьютером после проверки.' : 'Для подтверждения резервов потребуется обновлённый Financy Sync. До этого доступны предварительные движения.'}</p>
-      <Card className="space-y-3 p-4">
-        <h2 className="text-[17px] font-semibold">Хватит ли денег до конца месяца?</h2>
-        <p className={`text-[16px] font-medium ${shortage || (money.free ?? 0) < 0 ? 'text-expense' : 'text-income'}`}>{money.balance === null ? 'Сначала укажите фактический баланс' : shortage ? `Не хватает ${fmt(shortage)}` : money.free! < 0 ? `Есть риск нехватки: дефицит ${fmt(-money.free!)}` : 'Денег достаточно на известные обязательства'}</p>
-        <p className="text-[13px] text-mist">Неоплаченные обязательства с учётом просроченных: {fmt(required)}. Будущие доходы не включены.</p>
+    <header className="pt-safe flex items-center justify-between gap-2 px-5 pb-4"><h1 className="font-display text-[24px] font-semibold">Планирование</h1><button aria-label="Настройки планирования" onClick={() => setSettings(true)} className="glass press grid h-11 w-11 shrink-0 place-items-center rounded-full"><Settings2 size={19} /></button></header>
+    <div className="space-y-3 px-4">
+      <Card className="grid grid-cols-2 gap-4 p-5">
+        <div><p className="text-[13px] text-mist">Зарезервировано</p><p className="num mt-1 text-[23px] font-semibold text-iris">{fmt(money.reserved)}</p></div>
+        <div><p className="text-[13px] text-mist">Свободно</p><p className={'num mt-1 text-[23px] font-semibold ' + ((money.free ?? 0) < 0 ? 'text-expense' : 'text-income')}>{money.free === null ? '—' : fmt(money.free)}</p></div>
+        {money.balance === null && <button className="press col-span-2 min-h-11 text-left text-[14px] text-iris" onClick={() => tool({ kind: 'balance' })}>Указать фактический остаток</button>}
       </Card>
-      <div className="grid grid-cols-2 gap-2">
-        <button className="glass press flex min-h-14 items-center justify-center gap-2 rounded-2xl px-2 text-[14px]" onClick={() => setModal({ kind: 'envelope' })}><Plus size={18} /> Конверт</button>
-        <button className="glass press flex min-h-14 items-center justify-center gap-2 rounded-2xl px-2 text-[14px]" onClick={() => setModal({ kind: 'distribution' })}><ArrowLeftRight size={18} /> Распределить</button>
-      </div>
-      <label className="glass flex min-h-14 items-center gap-3 rounded-2xl px-4 py-3 text-[14px]"><input type="checkbox" checked={automatic} onChange={(event) => { void savePlan({ id: 'planning-settings', kind: 'settings', auto: event.target.checked }).catch(() => toast('Не удалось сохранить настройку')) }} /> Предлагать распределение свободных денег</label>
-      <label className="glass flex min-h-14 items-center gap-3 rounded-2xl px-4 py-3 text-[14px]"><input type="checkbox" checked={planning.find((r) => r.kind === 'settings')?.order === 'priority'} onChange={(event) => { void savePlan({ id: 'planning-settings', kind: 'settings', auto: automatic, order: event.target.checked ? 'priority' : 'obligations-first' }).catch(() => toast('Не удалось сохранить настройку')) }} /> Использовать общий приоритет вместо порядка «обязательства → подушка → цели»</label>
-      {automatic && distribution(operations, projectedPlanning()).length > 0 && <button onClick={() => setModal({ kind: 'distribution' })} className="glass press w-full rounded-2xl p-4 text-left text-[14px] text-income">Есть свободные деньги. Посмотреть предложение →</button>}
-      {envelopes.length === 0 && <Card><Empty title="Планы без лишних трат" text="Добавьте обязательный платёж или цель. Резервирование не создаёт расход." /></Card>}
-      {envelopes.map((envelope) => {
-        const nextDue = envelope.mode === 'obligation' ? nextPaymentPeriod(envelope, operations) : envelope.due
-        const saved = money.reserves[envelope.id] ?? 0
-        const target = envelope.target ?? 0
-        const missing = Math.max(0, target - saved)
-        const percent = Math.min(100, Math.round(saved / Math.max(1, target) * 100))
-        return <Card key={envelope.id} className="space-y-3 p-4">
-          <button onClick={() => setModal({ kind: 'envelope', record: envelope })} className="press flex w-full items-start gap-3 text-left"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-iris/12 text-iris">{envelope.mode === 'obligation' ? <CalendarDays size={21} /> : <Target size={21} />}</span><span className="min-w-0 flex-1"><span className="block break-words text-[17px] font-semibold">{envelope.icon ? `${envelope.icon} ` : ''}{envelope.name}</span><span className="block text-[12px] text-mist">{envelope.mode === 'obligation' ? 'Обязательство' : envelope.cushion ? 'Финансовая подушка' : 'Цель'} · Приоритет {envelope.priority} · {envelope.state === 'active' ? 'Активно' : envelope.state === 'paused' ? 'На паузе' : 'Закрыто'}</span></span><Settings2 size={17} className="text-mist" /></button>
-          <div className="flex flex-wrap justify-between gap-2 text-[14px]"><span className="num text-income">{fmt(saved)} / {fmt(target)}</span><span className="text-mist">{percent}%</span></div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-income transition-[width] duration-300" style={{ width: `${percent}%` }} /></div>
-          <p className="text-[13px] text-mist">Осталось {fmt(missing)}{nextDue ? ` · ${envelope.mode === 'obligation' ? 'Следующий платёж' : 'Желаемый срок'} ${nextDue}` : envelope.mode === 'obligation' ? ' · Обязательство оплачено' : ''}. {envelope.mode === 'goal' && missing > 0 ? 'Срок достижения пока не прогнозируем.' : ''}</p>
-          {due.filter((p) => p.envelope.id === envelope.id).slice(0, 3).map((p) => <p key={p.period} className="text-[13px] text-amber">К оплате {p.period}: {fmt(p.missing)}</p>)}
-          <button className="glass press flex min-h-11 w-full items-center justify-center gap-2 rounded-xl text-[14px]" onClick={() => setModal({ kind: 'move', record: envelope })}><Wallet size={17} /> Управлять резервом</button>
-        </Card>
+      {!envelopes.length && <p className="px-1 py-5 text-center text-[14px] text-mist">Добавьте план и решите, сколько отложить.</p>}
+      {envelopes.map((record) => {
+        const saved = money.reserves[record.id] ?? 0, target = record.target ?? 0
+        const pending = records.some((r) => r.kind === 'movement' && r.status === 'pending' && (r.from === record.id || r.to === record.id))
+        const rejected = records.some((r) => r.kind === 'movement' && r.status === 'rejected' && (r.from === record.id || r.to === record.id))
+        const date = record.mode === 'obligation' ? nextPaymentPeriod(record, operations) : record.due
+        const schedule = record.frequency === 'monthly' && record.due ? frequencies.monthly + ', ' + (record.scheduleDay ?? Number(record.due.slice(-2))) + ' числа' : (frequencies[record.frequency ?? 'once'] + (date ? ' · ' + new Date(date + 'T12:00:00').toLocaleDateString('ru-RU') : ''))
+        return <button key={record.id} aria-label={'Открыть план ' + record.name} onClick={() => setEditor({ record })} className="glass press block w-full rounded-[24px] p-4 text-left">
+          <div className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-iris/12 text-[23px] text-iris">{record.icon || (record.mode === 'obligation' ? <CalendarDays size={22} /> : <Target size={22} />)}</span><span className="min-w-0 flex-1"><span className="block break-words text-[17px] font-semibold">{record.name}</span><span className="num mt-0.5 block text-[15px]"><span className="font-medium text-iris">{fmt(saved)}</span><span className="text-mist"> / {fmt(target)}</span></span></span><ChevronRight size={17} className="shrink-0 text-fog" /></div>
+          <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-iris transition-[width] duration-300" style={{ width: String(Math.min(100, saved / Math.max(1, target) * 100)) + '%' }} /></div>
+          <p className="mt-2 text-[12px] text-mist">{record.state === 'closed' ? 'Закрыт · возврат резерва' : record.state === 'paused' ? 'На паузе · ' + schedule : schedule}</p>
+          {pending && <p className="mt-1 text-[12px] text-amber">Ожидает подтверждения · резерв {fmt(projected.reserves[record.id] ?? 0)}</p>}
+          {!pending && rejected && <p className="mt-1 text-[12px] text-amber">Проверьте изменение резерва</p>}
+        </button>
       })}
-      {planning.filter((r) => r.kind === 'movement' && r.status !== 'confirmed').map((event) => <Card key={event.id} className="space-y-2 p-4 text-[14px]">
-        <p className="font-medium text-amber">{event.status === 'pending' ? 'Ожидает подтверждения' : 'Нужна повторная проверка'} · {fmt(event.amount ?? 0)}</p>
-        <p>{envelopes.find((r) => r.id === event.from)?.name ?? 'Свободные'} → {envelopes.find((r) => r.id === event.to)?.name ?? 'Свободные'}</p>
-        {event.reason && <p className="text-[13px] text-mist">{event.reason}</p>}
-        {event.status === 'rejected' && <button className="press min-h-11 text-iris" onClick={() => { if (window.confirm('Повторно отправить движение на проверку с текущими данными?')) void alter(event, { status: 'pending', reason: undefined }) }}>Подтвердить повторно</button>}
-        <button className="press ml-3 min-h-11 text-mist" onClick={() => { void alter(event, { deletedAt: new Date().toISOString() }) }}>Отменить движение</button>
-      </Card>)}
-      <button className="glass press flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl text-[14px]" onClick={() => setModal({ kind: 'history' })}><History size={17} /> История баланса и резервов</button>
+      <button onClick={() => setEditor({})} className="glass press flex min-h-14 w-full items-center justify-center gap-2 rounded-[20px] font-semibold text-iris"><Plus size={20} /> Добавить план</button>
     </div>
+    {editor && <SimplePlan record={editor.record} onClose={() => setEditor(null)} onAdvanced={() => tool({ kind: 'move', record: editor.record })} />}
+    {settings && <PlanSettings onClose={() => setSettings(false)} onTool={tool} />}
     {modal && <PlanningModal modal={modal} onClose={() => setModal(null)} />}
   </>
+}
+
+function SimplePlan({ record, onClose, onAdvanced }: { record?: PlanningRecord; onClose: () => void; onAdvanced: () => void }) {
+  const records = useStore((s) => s.planning), operations = useStore((s) => s.operations)
+  const projected = financials(operations, projectedPlanning())
+  const current = record ? projected.reserves[record.id] ?? 0 : 0
+  const [name, setName] = useState(record?.name ?? '')
+  const [budget, setBudget] = useState(record ? String((record.target ?? 0) / 100) : '')
+  const [frequency, setFrequency] = useState<NonNullable<PlanningRecord['frequency']>>(record?.frequency ?? 'monthly')
+  const [date, setDate] = useState(record?.due ?? localDay())
+  const [amount, setAmount] = useState(record ? String(current / 100) : '')
+  const [busy, setBusy] = useState(false), saving = useRef(false)
+  const reserveAmount = amount.trim() ? signedCents(amount) : 0
+  const change = (reserveAmount ?? 0) - current
+  const remaining = projected.free === null ? null : projected.free - change
+  const valid = !!name.trim() && !!textToCents(budget) && reserveAmount !== null && reserveAmount >= 0 && (change <= 0 || (remaining !== null && remaining >= 0)) && (frequency === 'once' || !!date)
+  const save = async () => {
+    if (saving.current || !valid) return
+    saving.current = true; setBusy(true)
+    try {
+      await savePlanWithReserve({ ...record, kind: 'envelope', name: name.trim(), target: textToCents(budget)!, frequency, due: date || undefined, mode: record && record.frequency === frequency ? record.mode : frequency === 'once' ? 'goal' : 'obligation', priority: record?.priority ?? 1, state: record?.state ?? 'active' }, reserveAmount!)
+      toast(record ? 'План сохранён' : 'План создан'); onClose()
+    } catch (error) { toast((error as Error).message) }
+    finally { saving.current = false; setBusy(false) }
+  }
+  const remove = async () => {
+    if (!record || saving.current || !window.confirm('Удалить план «' + record.name + '»? Подтверждённый резерв будет возвращён после синхронизации. История сохранится.')) return
+    saving.current = true; setBusy(true)
+    try { await closePlan(record); toast('План закрыт. Возврат резерва сохранён.'); onClose() } catch (error) { toast((error as Error).message) }
+    finally { saving.current = false; setBusy(false) }
+  }
+  const requests = record ? records.filter((r) => r.kind === 'movement' && r.status !== 'confirmed' && (r.from === record.id || r.to === record.id)) : []
+  return <Sheet open full title={record ? 'План' : 'Новый план'} onClose={() => { if (!saving.current) onClose() }}>
+    <div className="space-y-4 px-5 pt-4">
+      <fieldset disabled={busy} className="space-y-4">
+        <label className="block space-y-2 text-[14px] text-mist">Название плана<input autoComplete="off" aria-label="Название плана" className={field} value={name} onChange={(e) => setName(e.target.value)} placeholder="Название" /></label>
+        <label className="block space-y-2 text-[14px] text-mist">Нужный бюджет<input aria-label="Нужный бюджет" className={field} inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="Сумма, EUR" /></label>
+        <label className="block space-y-2 text-[14px] text-mist">Периодичность<select aria-label="Периодичность" className={field} value={frequency} onChange={(e) => { const value = e.target.value as typeof frequency; setFrequency(value); if (value === 'once' && !record) setDate('') }}>{Object.entries(frequencies).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="block space-y-2 text-[14px] text-mist">{frequency === 'once' ? 'Дата (необязательно)' : 'Дата платежа'}<input type="date" aria-label="Дата платежа" className={field} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <label className="block space-y-2 text-[14px] text-mist">{record ? 'Сколько оставить в резерве?' : 'Сколько зарезервировать сейчас?'}<input aria-label="Зарезервировать сейчас" className={field} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></label>
+        <Card className="space-y-2 p-4 text-[13px]">
+          <p className="flex justify-between gap-2"><span className="text-mist">{projected.pending.length ? 'Свободно с учётом заявок' : 'Свободно до распределения'}</span><span className="num">{projected.free === null ? '—' : fmt(projected.free)}</span></p>
+          <p className="flex justify-between gap-2"><span className="text-mist">{record ? 'Новый резерв плана' : 'В резерв нового плана'}</span><span className="num text-iris">{fmt(reserveAmount ?? 0)}</span></p>
+          <p className="flex justify-between gap-2"><span className="text-mist">Останется свободно</span><span className={'num font-semibold ' + ((remaining ?? 0) < 0 ? 'text-expense' : 'text-income')}>{remaining === null ? '—' : fmt(remaining)}</span></p>
+        </Card>
+        {change > 0 && (remaining === null || remaining < 0) && <p role="alert" className="text-[13px] text-expense">{remaining === null ? 'Сначала укажите фактический остаток в настройках планирования.' : 'Эта сумма превышает свободный остаток.'}</p>}
+      </fieldset>
+      <PrimaryButton disabled={busy || !valid} onClick={save}>{record ? 'Сохранить изменения' : 'Создать план'}</PrimaryButton>
+      {record && <><button disabled={busy} onClick={onAdvanced} className="press min-h-11 w-full text-[14px] text-iris">Другие действия с резервом</button><button disabled={busy} onClick={remove} className="press min-h-11 w-full text-[14px] text-expense">Удалить план</button></>}
+      {!!requests.length && <p className="text-[12px] text-amber">Изменение резерва ожидает проверки. Подробности — в настройках планирования.</p>}
+      <button disabled={busy} onClick={onClose} className="press h-12 w-full text-[15px] text-mist">Отмена</button>
+    </div>
+  </Sheet>
+}
+
+function PlanSettings({ onClose, onTool }: { onClose: () => void; onTool: (modal: Modal) => void }) {
+  const records = useStore((s) => s.planning), operations = useStore((s) => s.operations)
+  const sync = useSyncStatus(), prefs = records.find((r) => r.kind === 'settings')
+  const alter = async (record: PlanningRecord, patch: Partial<PlanningRecord>) => { try { await savePlan({ ...record, ...patch }) } catch (error) { toast((error as Error).message) } }
+  return <Sheet open title="Настройки планирования" onClose={onClose}><div className="space-y-3 px-5 pt-4">
+    <button aria-label="Настроить баланс" onClick={() => onTool({ kind: 'balance' })} className="glass press min-h-12 w-full rounded-2xl px-4 text-left text-[15px]">Фактический баланс</button>
+    <button onClick={() => onTool({ kind: 'history' })} className="glass press min-h-12 w-full rounded-2xl px-4 text-left text-[15px]">История баланса и резервов</button>
+    <label className="glass flex min-h-14 items-center gap-3 rounded-2xl px-4 py-3 text-[14px]"><input type="checkbox" checked={prefs?.auto ?? false} onChange={(e) => { void savePlan({ id: 'planning-settings', kind: 'settings', auto: e.target.checked }).catch(() => toast('Не удалось сохранить настройку')) }} /> Предлагать распределение</label>
+    <label className="glass flex min-h-14 items-center gap-3 rounded-2xl px-4 py-3 text-[14px]"><input type="checkbox" checked={prefs?.order === 'priority'} onChange={(e) => { void savePlan({ id: 'planning-settings', kind: 'settings', auto: prefs?.auto ?? false, order: e.target.checked ? 'priority' : 'obligations-first' }).catch(() => toast('Не удалось сохранить настройку')) }} /> Распределять по общему приоритету</label>
+    <button onClick={() => onTool({ kind: 'distribution' })} className="glass press min-h-12 w-full rounded-2xl px-4 text-left text-[15px]">Посмотреть распределение</button>
+    <details className="glass rounded-2xl p-4"><summary className="min-h-7 text-[14px]">Приоритеты и архив планов</summary><div className="mt-2 space-y-2">{records.filter((r) => r.kind === 'envelope').map((r) => <button key={r.id} onClick={() => onTool({ kind: 'envelope', record: r })} className="press min-h-11 w-full text-left text-[14px]">{r.name} · {r.state === 'closed' ? 'Архив' : 'Приоритет ' + r.priority}</button>)}</div></details>
+    <details className="glass rounded-2xl p-4"><summary className="min-h-7 text-[14px]">Обязательства до конца месяца</summary>{obligations(operations, records).map((p) => <p key={p.envelope.id + p.period} className="mt-2 text-[13px] text-mist">{p.envelope.name} · {p.period} · {fmt(p.missing)}</p>)}</details>
+    {records.filter((r) => r.kind === 'movement' && r.status !== 'confirmed').map((event) => <Card key={event.id} className="space-y-2 p-3 text-[13px]"><p>{event.status === 'pending' ? 'Ожидает подтверждения' : 'Проверьте резерв'} · {fmt(event.amount ?? 0)}</p><p className="text-mist">{event.reason || 'Подтверждение выполняется при доступном совместимом Sync.'}</p>{event.status === 'rejected' && <button className="press min-h-11 text-iris" onClick={() => { if (window.confirm('Повторить проверку резерва с текущими данными?')) void alter(event, { status: 'pending', reason: undefined }) }}>Проверить повторно</button>}<button className="press ml-3 min-h-11 text-mist" onClick={() => { void alter(event, { deletedAt: new Date().toISOString() }) }}>Отменить заявку</button></Card>)}
+    <p className="text-[12px] text-mist">{sync.planningSupported ? 'Sync поддерживает подтверждение резервов.' : 'Для подтверждения резервов потребуется совместимый Financy Sync. Записи остаются на устройстве.'}</p>
+    <button onClick={onClose} className="press h-12 w-full text-[15px] text-mist">Закрыть</button>
+  </div></Sheet>
 }
 
 function PlanningModal({ modal, onClose }: { modal: Modal; onClose: () => void }) {

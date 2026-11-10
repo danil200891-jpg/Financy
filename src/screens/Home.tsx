@@ -86,8 +86,8 @@ export function Home({ nav }: { nav: Nav }) {
           { label: 'Доход', Icon: ArrowDownLeft, mode: 'income' as const, color: 'text-income', surface: 'bg-income/10 ring-income/20' },
           { label: 'Расход', Icon: ArrowUpRight, mode: 'expense' as const, color: 'text-expense', surface: 'bg-expense/10 ring-expense/20' },
         ].map((a) => (
-          <button key={a.mode} onClick={() => nav.openAdd(a.mode)} style={{ background: `linear-gradient(135deg,${a.mode === 'income' ? 'rgba(63,224,197,.13)' : 'rgba(255,107,129,.13)'},rgba(255,255,255,.025))` }} className={`press flex glass min-h-[72px] items-center justify-center gap-3 rounded-[24px] ring-1 ring-inset ${a.surface} ${a.color}`}>
-            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/5"><a.Icon size={26} strokeWidth={2} /></span>
+          <button key={a.mode} onClick={() => nav.openAdd(a.mode)} style={{ background: `linear-gradient(135deg,${a.mode === 'income' ? 'rgba(63,224,197,.13)' : 'rgba(255,107,129,.13)'},rgba(255,255,255,.025))` }} className={`press flex glass min-h-[56px] items-center justify-center gap-3 rounded-[20px] ring-1 ring-inset ${a.surface} ${a.color}`}>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/5"><a.Icon size={24} strokeWidth={2} /></span>
             <span className="text-[18px] font-semibold">{a.label}</span>
           </button>
         ))}

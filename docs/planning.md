@@ -42,3 +42,9 @@ Balance checkpoints and reserve commands remain an immutable journal during rest
 Use the separate preview origin, not the existing installed app's origin. Do not pair a synthetic-data preview with the real PC database. Confirmed planning sync is exercised by the isolated two-device test; the installed server requires the separately approved update.
 
 On physical iPhone check Safari and installed test PWA: touch targets, keyboard/date controls, scroll, camera/gallery, five tabs, offline restart and update prompt. Keep the existing PWA and backups. Financial data does not automatically move between origins.
+
+## Compact planning interface
+
+The daily screen shows confirmed reserved/free money and compact plan cards. New plans use name, budget, frequency, optional one-time date and a user-entered reserve. The form previews pending requests to avoid allocating the same cash twice, while the summary continues to show confirmed amounts.
+
+Creating/editing a plan and its reserve delta uses one IndexedDB transaction. Closing a plan retains its history, cancels outstanding local requests and submits a normal release command for confirmed money. Released money becomes free only after confirmation. Advanced distribution, priorities, archive and request review remain in planning settings. This UI change requires no database or backup migration.

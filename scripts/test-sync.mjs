@@ -200,6 +200,15 @@ try {
   await phone(`api.restore('${planBackup.file}')`); await phone('api.sync()'); await pc('api.sync()')
   check((await pc('api.planMoney()')).reserves['synthetic-rent'] === 75000, 'Planning backup restore duplicated reserve')
   console.log('PASS linked payment edit/delete, v2 PC backup and restore without double reserve')
+  const beforeSimple = await phone('api.planMoney()')
+  const simple = await phone('api.createSimple()')
+  await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves[simple.id] === 1000, 'Atomic initial reserve did not sync')
+  const operationsBeforeClose = JSON.stringify(await phone('api.live()'))
+  await phone('api.closeSimple(' + JSON.stringify(simple.id) + ')'); await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves[simple.id] === 0 && (await pc('api.planMoney()')).free === beforeSimple.free, 'Closing plan did not release reserve across devices')
+  check((await pc('api.plan()')).find((r) => r.id === simple.id)?.state === 'closed' && JSON.stringify(await phone('api.live()')) === operationsBeforeClose, 'Closing plan removed financial operations or journal')
+  console.log('PASS simple-plan atomic initial reserve and safe close/release sync without income or expense')
 
   // 9. server restart keeps everything
   const total = Object.keys(server.db.records).length
