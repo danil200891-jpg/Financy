@@ -90,9 +90,16 @@ export async function commit(
 ) {
   const d = await db()
   const tx = d.transaction(['operations', 'clients', 'categories', 'history'], 'readwrite')
-  for (const p of puts) await tx.objectStore(p.store).put(p.value as never)
-  for (const h of history) await tx.objectStore('history').put(h)
-  await tx.done
+  try {
+    for (const p of puts) await tx.objectStore(p.store).put(p.value as never)
+    for (const h of history) await tx.objectStore('history').put(h)
+    await tx.done
+  } catch (error) {
+    // A synchronous DataError does not automatically abort the transaction.
+    try { tx.abort() } catch { /* The transaction may already have aborted. */ }
+    await tx.done.catch(() => {})
+    throw error
+  }
 }
 
 export async function hardDelete(store: StoreName, ids: string[]) {
@@ -123,12 +130,18 @@ export async function replaceAll(data: {
 }) {
   const d = await db()
   const tx = d.transaction(['operations', 'clients', 'categories', 'history'], 'readwrite')
-  await Promise.all(['operations', 'clients', 'categories', 'history'].map((s) => tx.objectStore(s as 'history').clear()))
-  for (const o of data.operations) await tx.objectStore('operations').put(o)
-  for (const c of data.clients) await tx.objectStore('clients').put(c)
-  for (const c of data.categories) await tx.objectStore('categories').put(c)
-  for (const h of data.history) await tx.objectStore('history').put(h)
-  await tx.done
+  try {
+    await Promise.all(['operations', 'clients', 'categories', 'history'].map((s) => tx.objectStore(s as 'history').clear()))
+    for (const o of data.operations) await tx.objectStore('operations').put(o)
+    for (const c of data.clients) await tx.objectStore('clients').put(c)
+    for (const c of data.categories) await tx.objectStore('categories').put(c)
+    for (const h of data.history) await tx.objectStore('history').put(h)
+    await tx.done
+  } catch (error) {
+    try { tx.abort() } catch { /* The transaction may already have aborted. */ }
+    await tx.done.catch(() => {})
+    throw error
+  }
 }
 
 /** Ask iOS/Safari not to evict our data under storage pressure. */

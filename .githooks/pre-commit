@@ -1,16 +1,4 @@
 #!/bin/sh
 # Blocks commits that contain financial data, keys or certificates — whatever the file name.
 # Enabled per clone with:  git config core.hooksPath .githooks   (npm install does it automatically)
-fail=0
-for f in $(git diff --cached --name-only --diff-filter=ACM); do
-  case "$f" in .githooks/pre-commit) continue ;; esac
-  [ -f "$f" ] || continue
-  if git show ":$f" | grep -qE -e '-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)' \
-       -e '"app": ?"finance-pwa"' \
-       -e '^.?Дата;Время;Тип;Сумма' \
-       -e '(ghp_|github_pat_|sk_live_|AKIA)[A-Za-z0-9]{12,}'; then
-    echo "pre-commit: blocked $f — looks like a key/certificate, a Finance backup or a CSV export"
-    fail=1
-  fi
-done
-[ $fail -eq 0 ] || { echo "Remove it from the commit (git restore --staged <file>)."; exit 1; }
+exec node scripts/check-staged.mjs
