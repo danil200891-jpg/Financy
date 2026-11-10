@@ -4,6 +4,7 @@ import './index.css'
 import App from './App'
 import { initStore } from './lib/store'
 import { toast } from './lib/toast'
+import { initDriveBackup } from './lib/drive-backup'
 
 type Boot = { stage: (s: string) => void; done: () => void; fail: (title: string, err: unknown) => void }
 const boot = (window as unknown as { __boot?: Boot }).__boot
@@ -46,6 +47,7 @@ Promise.race([
   new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Хранилище не ответило за 12 секунд')), 12000)),
 ])
   .then(() => {
+    void initDriveBackup().catch(() => {})
     boot?.stage('rendering')
     root.render(
       <StrictMode>

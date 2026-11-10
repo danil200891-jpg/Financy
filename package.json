@@ -14,6 +14,7 @@
     "cert": "node scripts/local-cert.mjs",
     "iphone:http": "npm run build && vite preview --host --mode lan-http --port 4180",
     "check": "tsc -b",
+    "test:drive": "node scripts/test-drive-backup.mjs",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {

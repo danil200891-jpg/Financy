@@ -12,19 +12,19 @@ const hasLocalCert = existsSync('.cert/server.crt') && existsSync('.cert/server.
 const localHttps = hasLocalCert ? { cert: readFileSync('.cert/server.crt'), key: readFileSync('.cert/server.key') } : undefined
 
 /**
- * Content-Security-Policy for production builds: the browser itself refuses any network
- * connection outside the app's own origin, so financial data cannot be sent anywhere —
- * even by a bug or a dependency default (e.g. Tesseract's CDN fallback).
+ * Production CSP permits the local app and the Google endpoints required by the
+ * optional Drive backup. OCR remains local, including its worker and language data.
  * 'wasm-unsafe-eval'/'unsafe-eval' are needed for the OCR WebAssembly engine on iOS Safari.
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://accounts.google.com/gsi/",
   "worker-src 'self' blob:",
-  "connect-src 'self' blob: data:",
+  "connect-src 'self' blob: data: https://accounts.google.com/gsi/ https://www.googleapis.com/drive/ https://www.googleapis.com/upload/drive/",
+  "frame-src https://accounts.google.com/gsi/",
   "img-src 'self' data: blob:",
   "media-src 'self' blob: mediastream:",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
   "font-src 'self' data:",
   "manifest-src 'self'",
   "object-src 'none'",

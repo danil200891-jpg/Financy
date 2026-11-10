@@ -40,15 +40,11 @@ async function deliver(blob: Blob, name: string) {
 }
 
 export async function buildBackup(): Promise<Backup> {
-  const { all } = getState()
   return {
     app: BACKUP_APP,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    operations: all.operations,
-    clients: all.clients,
-    categories: all.categories,
-    history: await DB.allHistory(),
+    ...await DB.backupSnapshot(),
   }
 }
 

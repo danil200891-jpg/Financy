@@ -34,12 +34,12 @@ Always run `npx tsc -b` and `npm run build` before finishing a change.
    - Keep the backup format backward compatible: bump `BACKUP_VERSION` and keep `parseBackup` able to read older files.
    - Deletions are soft (`deletedAt`); every write goes through `store.ts` so it lands in the `history` store.
 3. **Never invent recognized data.** If OCR/parsing can't find a field, leave it empty and set a flag for the user to confirm.
-4. **Privacy.** No network calls with user data, no analytics, no paid APIs. Never commit backups, CSV exports, `.cert/`, keys or `.env` (see `.gitignore`).
+4. **Privacy.** User data stays local except for explicitly connected Google Drive backups using only `drive.file`. No analytics or paid APIs. OAuth access tokens stay in memory, never in storage or logs. Never commit backups, CSV exports, `.cert/`, keys or `.env` (see `.gitignore`).
 5. **iOS Safari compatibility.** Build target is Safari 15. Avoid regex lookbehind `(?<=` `(?<!`, and keep the ES5 boot watchdog in `index.html` working.
 6. **Paths.** The app is served from a subpath on GitHub Pages. Use `import.meta.env.BASE_URL` (or `%BASE_URL%` in `index.html`) — never hard-code `/...` URLs.
 7. **Updates.** Service worker uses `registerType: 'prompt'`: a new version is offered with an «Обновить» toast; do not switch to auto-reload.
 8. Do not publish, push or create remote repositories without the user's explicit permission.
-9. **No external network origins.** Production builds ship a Content-Security-Policy (`vite.config.ts`, `connect-src 'self'`). Never add CDNs, fonts, analytics or APIs from other domains; bundle dependencies locally instead.
+9. **External network origins.** Production CSP permits the app origin and the Google Identity Services / Drive API endpoints used by opt-in backup. Load GIS directly from Google as required by its supported integration. Keep all other dependencies, fonts and OCR assets local. Do not expand external origins without a user request.
 
 ## Working together (Claude Code + ChatGPT Codex on one repo)
 

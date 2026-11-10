@@ -12,6 +12,17 @@ interface FinanceDB extends DBSchema {
 export type StoreName = 'operations' | 'clients' | 'categories'
 
 let dbp: Promise<IDBPDatabase<FinanceDB>> | null = null
+const changeListeners = new Set<() => void>()
+
+/** Only successful financial transactions trigger automatic backups. */
+export function onDataChanged(listener: () => void) {
+  changeListeners.add(listener)
+  return () => { changeListeners.delete(listener) }
+}
+
+function dataChanged() {
+  changeListeners.forEach((listener) => listener())
+}
 
 /**
  * WebKit bug: on a cold start indexedDB.open() can stay pending forever until the IDB
@@ -83,6 +94,20 @@ export async function loadAll() {
   return { operations, clients, categories, initialized: !!initialized }
 }
 
+/** Read one committed snapshot, including its history, in a single transaction. */
+export async function backupSnapshot() {
+  const d = await db()
+  const tx = d.transaction(['operations', 'clients', 'categories', 'history'])
+  const [operations, clients, categories, history] = await Promise.all([
+    tx.objectStore('operations').getAll(),
+    tx.objectStore('clients').getAll(),
+    tx.objectStore('categories').getAll(),
+    tx.objectStore('history').getAll(),
+  ])
+  await tx.done
+  return { operations, clients, categories, history }
+}
+
 /** Writes records and their history entries in one transaction so they never diverge. */
 export async function commit(
   puts: { store: StoreName; value: Operation | Client | Category }[],
@@ -100,6 +125,7 @@ export async function commit(
     await tx.done.catch(() => {})
     throw error
   }
+  dataChanged()
 }
 
 export async function hardDelete(store: StoreName, ids: string[]) {
@@ -107,6 +133,7 @@ export async function hardDelete(store: StoreName, ids: string[]) {
   const tx = d.transaction(store, 'readwrite')
   for (const id of ids) await tx.store.delete(id)
   await tx.done
+  dataChanged()
 }
 
 export async function setMeta(key: string, value: unknown) {
@@ -142,6 +169,7 @@ export async function replaceAll(data: {
     await tx.done.catch(() => {})
     throw error
   }
+  dataChanged()
 }
 
 /** Ask iOS/Safari not to evict our data under storage pressure. */

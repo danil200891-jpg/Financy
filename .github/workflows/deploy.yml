@@ -31,6 +31,7 @@ jobs:
       - run: npm run build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
       - name: Guard — no certificates, keys or backups in the published files
         run: |
           if find dist \( -name '*.key' -o -name '*.pem' -o -name '*.crt' -o -name 'finance-backup-*' -o -name '*.csv' \) | grep -q .; then
