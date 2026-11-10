@@ -4,7 +4,7 @@ import * as DB from '../src/lib/db'
 import * as backup from '../src/lib/backup'
 import * as sync from '../src/lib/sync'
 import { getDevice } from '../src/lib/sync/device'
-import { savePlan, savePlanWithReserve, closePlan, financials } from '../src/lib/planning'
+import { savePlan, savePlanWithReserve, closePlan, financials, reserve } from '../src/lib/planning'
 
 const draft = (title: string, amount: number) => ({
   title, amount, type: 'income' as const, currency: 'EUR', date: new Date().toISOString(), categoryId: 'c-work', clientId: null, source: 'manual' as const,
@@ -12,6 +12,17 @@ const draft = (title: string, amount: number) => ({
 
 export const api = {
   planSave: savePlan,
+  reserveAutomatic: (amount: number, to: string) => reserve(amount, null, to),
+  staleOnce() {
+    const original = window.fetch
+    window.fetch = async (...args) => {
+      if (String(args[0]).endsWith('/planning/commit')) {
+        window.fetch = original
+        return new Response(JSON.stringify({ error: 'planning-stale' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+      }
+      return original(...args)
+    }
+  },
   createSimple: () => savePlanWithReserve({ kind: 'envelope', name: 'Synthetic simple sync', mode: 'goal', frequency: 'once', target: 5000, priority: 3, state: 'active' }, 1000),
   async closeSimple(id: string) { await sync.syncNow(); await closePlan(getState().planning.find((r) => r.id === id)!) },
   plan: () => getState().planning,

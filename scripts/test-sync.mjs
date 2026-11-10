@@ -67,6 +67,7 @@ try {
       return r.result.value
     }
     await run(`import('/test.js').then(() => window.api.init())`)
+    run.activate = () => cdp('Page.bringToFront')
     return run
   }
   const phone = await open(`http://127.0.0.1:${webPort}`)
@@ -209,6 +210,31 @@ try {
   check((await pc('api.planMoney()')).reserves[simple.id] === 0 && (await pc('api.planMoney()')).free === beforeSimple.free, 'Closing plan did not release reserve across devices')
   check((await pc('api.plan()')).find((r) => r.id === simple.id)?.state === 'closed' && JSON.stringify(await phone('api.live()')) === operationsBeforeClose, 'Closing plan removed financial operations or journal')
   console.log('PASS simple-plan atomic initial reserve and safe close/release sync without income or expense')
+
+  // Automatic reserve confirmation includes bounded stale-revision retry; no manual sync call.
+  const waitAutomaticReserve = async (expected) => {
+    for (let n = 0; n < 120; n++) {
+      if ((await phone('api.planMoney()')).reserves['synthetic-goal'] === expected) return
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    throw new Error('Automatic reserve did not confirm: ' + JSON.stringify({expected, status: await phone('api.status()'), money: await phone('api.planMoney()'), events: await phone("api.plan().filter(r=>r.kind==='movement').map(r=>({id:r.id,status:r.status,reason:r.reason}))")}))
+  }
+  await phone.activate()
+  let goalReserve = (await phone('api.planMoney()')).reserves['synthetic-goal']
+  await phone('api.staleOnce()')
+  await phone("api.reserveAutomatic(100, 'synthetic-goal')")
+  await waitAutomaticReserve(goalReserve + 100)
+  check(!(await phone('api.plan()')).some((r) => r.kind === 'movement' && r.reason?.includes('Конфликт команды')), 'Transient stale revision required manual review')
+  await server.stop()
+  goalReserve = (await phone('api.planMoney()')).reserves['synthetic-goal']
+  await phone("api.reserveAutomatic(100, 'synthetic-goal')")
+  check((await phone('api.planMoney()')).reserves['synthetic-goal'] === goalReserve, 'Offline reserve was shown as confirmed')
+  server = await startSync()
+  await phone("Promise.resolve(window.dispatchEvent(new Event('online')))")
+  await waitAutomaticReserve(goalReserve + 100)
+  await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves['synthetic-goal'] === goalReserve + 100, 'Automatic reconnect duplicated or lost reserve')
+  console.log('PASS automatic reserve confirmation, stale retry and offline → online catch-up without manual confirmation')
 
   // 9. server restart keeps everything
   const total = Object.keys(server.db.records).length

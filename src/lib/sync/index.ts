@@ -117,16 +117,28 @@ async function confirmMovements(device: PairedDevice, host: string) {
   for (const event of candidates) {
     const base = await loadBase()
     if (base[keyOf('planning', event.id)]?.hash === await hashRecord(event)) continue
-    const current = await signed<{ seq: number }>(device, host, 'GET', '/sync/status?planning=2')
-    try {
-      const result = await signed<{ record: RemoteRecord }>(device, host, 'POST', '/planning/commit', { event, baseSeq: current.seq })
-      await applyRecords([{ entity: 'planning', data: result.record.data, sentHash: await hashRecord(event) }])
-      base[keyOf('planning', event.id)] = { rev: result.record.rev, hash: result.record.hash }
-      await DB.setMeta('syncBase', base)
-    } catch (error) {
-      if (!(error instanceof HttpError) || error.status !== 409) throw error
-      actions.savePlanning({ ...event, status: 'rejected', reason: 'Данные изменились или денег недостаточно. Проверьте и подтвердите заново.', updatedAt: new Date().toISOString() })
-      await waitForWrites()
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await signed<{ seq: number }>(device, host, 'GET', '/sync/status?planning=2')
+      try {
+        const result = await signed<{ record: RemoteRecord }>(device, host, 'POST', '/planning/commit', { event, baseSeq: current.seq })
+        await applyRecords([{ entity: 'planning', data: result.record.data, sentHash: await hashRecord(event) }])
+        const latestBase = await loadBase()
+        latestBase[keyOf('planning', event.id)] = { rev: result.record.rev, hash: result.record.hash }
+        await DB.setMeta('syncBase', latestBase)
+        break
+      } catch (error) {
+        if (!(error instanceof HttpError) || error.status !== 409) throw error
+        // Another device may have written between status and commit. Refresh and retry
+        // the same command ID; actual insufficient funds still require explicit review.
+        if (error.code === 'planning-stale') {
+          if (attempt === 2) throw error
+          await pull(device, host)
+          continue
+        }
+        actions.savePlanning({ ...event, status: 'rejected', reason: error.code === 'planning-funds' ? 'Недостаточно доступных денег или план изменён. Проверьте резерв.' : 'Конфликт команды резерва. Проверьте изменение в настройках.', updatedAt: new Date().toISOString() })
+        await waitForWrites()
+        break
+      }
     }
   }
 }

@@ -48,3 +48,8 @@ On physical iPhone check Safari and installed test PWA: touch targets, keyboard/
 The daily screen shows confirmed reserved/free money and compact plan cards. New plans use name, budget, frequency, optional one-time date and a user-entered reserve. The form previews pending requests to avoid allocating the same cash twice, while the summary continues to show confirmed amounts.
 
 Creating/editing a plan and its reserve delta uses one IndexedDB transaction. Closing a plan retains its history, cancels outstanding local requests and submits a normal release command for confirmed money. Released money becomes free only after confirmation. Advanced distribution, priorities, archive and request review remain in planning settings. This UI change requires no database or backup migration.
+
+
+## Inline reserve workflow
+
+Plan cards expand in place without autofocus or a modal. The entered amount is an addition, not a replacement total. Available money is bounded by both confirmed free cash and the pending projection; a pending release cannot be spent early. Metadata editing is separate and never changes a reserve. Reductions/transfers remain available as a small secondary action. Confirmed totals stay separate from provisional requests. Automatic signed sync retries transient stale revisions with the same command ID; genuine funds/command conflicts require review. See [the separately approved Sync update procedure](sync-update.md).

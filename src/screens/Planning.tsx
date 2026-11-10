@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { CalendarDays, Plus, Settings2, Target, ChevronRight } from 'lucide-react'
+import { CalendarDays, Plus, Settings2, Target, ChevronDown } from 'lucide-react'
 import { Card, PrimaryButton, Sheet } from '../components/ui'
 import { useStore } from '../lib/store'
 import { distribution, financials, localDay, obligations, projectedPlanning, reserve, savePlan, savePlanWithReserve, closePlan, nextPaymentPeriod } from '../lib/planning'
@@ -37,6 +37,7 @@ export function Planning() {
   const records = useStore((s) => s.planning)
   const operations = useStore((s) => s.operations)
   const [editor, setEditor] = useState<{ record?: PlanningRecord } | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [settings, setSettings] = useState(false)
   const [modal, setModal] = useState<Modal | null>(null)
   const money = useMemo(() => financials(operations, records), [operations, records])
@@ -52,26 +53,60 @@ export function Planning() {
         {money.balance === null && <button className="press col-span-2 min-h-11 text-left text-[14px] text-iris" onClick={() => tool({ kind: 'balance' })}>Указать фактический остаток</button>}
       </Card>
       {!envelopes.length && <p className="px-1 py-5 text-center text-[14px] text-mist">Добавьте план и решите, сколько отложить.</p>}
-      {envelopes.map((record) => {
-        const saved = money.reserves[record.id] ?? 0, target = record.target ?? 0
-        const pending = records.some((r) => r.kind === 'movement' && r.status === 'pending' && (r.from === record.id || r.to === record.id))
-        const rejected = records.some((r) => r.kind === 'movement' && r.status === 'rejected' && (r.from === record.id || r.to === record.id))
-        const date = record.mode === 'obligation' ? nextPaymentPeriod(record, operations) : record.due
-        const schedule = record.frequency === 'monthly' && record.due ? frequencies.monthly + ', ' + (record.scheduleDay ?? Number(record.due.slice(-2))) + ' числа' : (frequencies[record.frequency ?? 'once'] + (date ? ' · ' + new Date(date + 'T12:00:00').toLocaleDateString('ru-RU') : ''))
-        return <button key={record.id} aria-label={'Открыть план ' + record.name} onClick={() => setEditor({ record })} className="glass press block w-full rounded-[24px] p-4 text-left">
-          <div className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-iris/12 text-[23px] text-iris">{record.icon || (record.mode === 'obligation' ? <CalendarDays size={22} /> : <Target size={22} />)}</span><span className="min-w-0 flex-1"><span className="block break-words text-[17px] font-semibold">{record.name}</span><span className="num mt-0.5 block text-[15px]"><span className="font-medium text-iris">{fmt(saved)}</span><span className="text-mist"> / {fmt(target)}</span></span></span><ChevronRight size={17} className="shrink-0 text-fog" /></div>
-          <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-iris transition-[width] duration-300" style={{ width: String(Math.min(100, saved / Math.max(1, target) * 100)) + '%' }} /></div>
-          <p className="mt-2 text-[12px] text-mist">{record.state === 'closed' ? 'Закрыт · возврат резерва' : record.state === 'paused' ? 'На паузе · ' + schedule : schedule}</p>
-          {pending && <p className="mt-1 text-[12px] text-amber">Ожидает подтверждения · резерв {fmt(projected.reserves[record.id] ?? 0)}</p>}
-          {!pending && rejected && <p className="mt-1 text-[12px] text-amber">Проверьте изменение резерва</p>}
-        </button>
-      })}
+      {envelopes.map((record) => <PlanCard key={record.id} record={record} money={money} projected={projected} records={records} operations={operations} expanded={expanded === record.id} onToggle={() => setExpanded(expanded === record.id ? null : record.id)} onDone={() => setExpanded(null)} onEdit={() => setEditor({ record })} onManage={() => tool({ kind: 'move', record })} />)}
       <button onClick={() => setEditor({})} className="glass press flex min-h-14 w-full items-center justify-center gap-2 rounded-[20px] font-semibold text-iris"><Plus size={20} /> Добавить план</button>
     </div>
     {editor && <SimplePlan record={editor.record} onClose={() => setEditor(null)} onAdvanced={() => tool({ kind: 'move', record: editor.record })} />}
     {settings && <PlanSettings onClose={() => setSettings(false)} onTool={tool} />}
     {modal && <PlanningModal modal={modal} onClose={() => setModal(null)} />}
   </>
+}
+
+function PlanCard({ record, money, projected, records, operations, expanded, onToggle, onDone, onEdit, onManage }: {
+  record: PlanningRecord; money: ReturnType<typeof financials>; projected: ReturnType<typeof financials>;
+  records: PlanningRecord[]; operations: Parameters<typeof financials>[0]; expanded: boolean;
+  onToggle: () => void; onDone: () => void; onEdit: () => void; onManage: () => void;
+}) {
+  const sync = useSyncStatus()
+  const [amount, setAmount] = useState(''), [busy, setBusy] = useState(false)
+  const saving = useRef(false)
+  const saved = money.reserves[record.id] ?? 0, target = record.target ?? 0
+  const proposed = projected.reserves[record.id] ?? 0, cents = textToCents(amount)
+  const free = money.free === null || projected.free === null ? null : Math.min(money.free, projected.free), remaining = free === null ? null : free - (cents ?? 0)
+  const valid = !!cents && remaining !== null && remaining >= 0 && record.state === 'active'
+  const pending = records.some((r) => r.kind === 'movement' && r.status === 'pending' && (r.from === record.id || r.to === record.id))
+  const rejected = records.some((r) => r.kind === 'movement' && r.status === 'rejected' && (r.from === record.id || r.to === record.id))
+  const date = record.mode === 'obligation' ? nextPaymentPeriod(record, operations) : record.due
+  const schedule = record.frequency === 'monthly' && record.due ? frequencies.monthly + ', ' + (record.scheduleDay ?? Number(record.due.slice(-2))) + ' числа' : frequencies[record.frequency ?? 'once'] + (date ? ' · ' + new Date(date + 'T12:00:00').toLocaleDateString('ru-RU') : '')
+  const submit = async () => {
+    if (saving.current || !valid) return
+    saving.current = true; setBusy(true)
+    try { await reserve(cents!, null, record.id); setAmount(''); onDone(); toast('Резерв сохранён. Синхронизация выполняется автоматически.') }
+    catch (error) { toast((error as Error).message) }
+    finally { saving.current = false; setBusy(false) }
+  }
+  return <Card className="overflow-hidden">
+    <div className="flex items-start pr-2">
+      <button aria-label={'Открыть план ' + record.name} aria-expanded={expanded} aria-controls={'reserve-' + record.id} disabled={busy} onClick={onToggle} className="press min-w-0 flex-1 p-4 text-left">
+        <div className="flex items-center gap-3"><span className="glass-tint grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-iris/12 text-[23px] text-iris">{record.icon || (record.mode === 'obligation' ? <CalendarDays size={22} /> : <Target size={22} />)}</span><span className="min-w-0 flex-1"><span className="block break-words text-[17px] font-semibold">{record.name}</span><span className="num mt-0.5 block text-[15px]"><span className="font-medium text-iris">{fmt(saved)}</span><span className="text-mist"> / {fmt(target)}</span></span></span><ChevronDown size={17} className={'shrink-0 text-fog transition-transform duration-300 ' + (expanded ? 'rotate-180' : '')} /></div>
+        <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/8"><div className="h-full rounded-full bg-iris transition-[width] duration-300" style={{ width: String(Math.min(100, saved / Math.max(1, target) * 100)) + '%' }} /></div>
+        <p className="mt-2 text-[12px] text-mist">{record.state === 'closed' ? 'Закрыт · возврат резерва' : record.state === 'paused' ? 'На паузе · ' + schedule : schedule}</p>
+        {pending && <p role="status" className="mt-1 text-[12px] text-amber">{!sync.paired ? 'Ожидает подключения Sync' : sync.reachable && sync.planningSupported === false ? 'Нужно обновление Sync' : sync.phase === 'error' ? 'Ошибка Sync — см. настройки' : 'Ожидает синхронизации'} · {fmt(proposed)}</p>}
+        {!pending && rejected && <p className="mt-1 text-[12px] text-amber">Проверьте изменение резерва</p>}
+      </button>
+      <button aria-label={'Настройки плана ' + record.name} onClick={onEdit} disabled={busy} className="glass-tint press mt-3 grid h-11 w-11 shrink-0 place-items-center rounded-full text-mist"><Settings2 size={17} /></button>
+    </div>
+    <div id={'reserve-' + record.id} className={'plan-expansion ' + (expanded ? 'is-open' : '')} aria-hidden={!expanded}>
+      <div className="min-h-0 overflow-hidden"><fieldset disabled={!expanded || busy} className="space-y-3 border-t border-line px-4 pt-4 pb-4">
+        <label data-pending-input={expanded && !!amount ? 'true' : undefined} className="glass flex h-12 items-center gap-2 rounded-2xl px-3.5"><input aria-label={'Сумма резерва ' + record.name} inputMode="decimal" autoComplete="off" className="min-w-0 flex-1 bg-transparent outline-none" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /><span className="text-mist">€</span></label>
+        <p className="flex justify-between gap-2 text-[13px]"><span className="text-mist">Свободно сейчас</span><span className="num">{free === null ? '—' : fmt(free)}</span></p>
+        <div className="glass-tint space-y-2 rounded-2xl p-3 text-[13px]"><p className="flex flex-wrap justify-between gap-1 text-mist"><span>После пополнения</span><span className="text-[11px] text-amber">До синхронизации</span></p><p className="flex justify-between gap-2"><span>В резерве</span><span className="num text-iris">{fmt(proposed + (cents ?? 0))}</span></p><p className="flex justify-between gap-2"><span>Свободно</span><span className={'num ' + ((remaining ?? 0) < 0 ? 'text-expense' : 'text-income')}>{remaining === null ? '—' : fmt(remaining)}</span></p></div>
+        {amount && !valid && <p role="alert" className="text-[13px] text-expense">{record.state !== 'active' ? 'Пополнение доступно для активного плана.' : free === null ? 'Укажите фактический остаток в настройках.' : !cents ? 'Введите положительную сумму.' : 'Недостаточно свободных денег.'}</p>}
+        <PrimaryButton disabled={busy || !valid} onClick={submit}>{busy ? 'Сохранение…' : 'Подтвердить резерв'}</PrimaryButton>
+        <button onClick={onManage} className="press min-h-11 w-full text-[13px] text-mist">Уменьшить или перевести резерв</button>
+      </fieldset></div>
+    </div>
+  </Card>
 }
 
 function SimplePlan({ record, onClose, onAdvanced }: { record?: PlanningRecord; onClose: () => void; onAdvanced: () => void }) {
@@ -85,14 +120,14 @@ function SimplePlan({ record, onClose, onAdvanced }: { record?: PlanningRecord; 
   const [amount, setAmount] = useState(record ? String(current / 100) : '')
   const [busy, setBusy] = useState(false), saving = useRef(false)
   const reserveAmount = amount.trim() ? signedCents(amount) : 0
-  const change = (reserveAmount ?? 0) - current
+  const change = record ? 0 : (reserveAmount ?? 0) - current
   const remaining = projected.free === null ? null : projected.free - change
   const valid = !!name.trim() && !!textToCents(budget) && reserveAmount !== null && reserveAmount >= 0 && (change <= 0 || (remaining !== null && remaining >= 0)) && (frequency === 'once' || !!date)
   const save = async () => {
     if (saving.current || !valid) return
     saving.current = true; setBusy(true)
     try {
-      await savePlanWithReserve({ ...record, kind: 'envelope', name: name.trim(), target: textToCents(budget)!, frequency, due: date || undefined, mode: record && record.frequency === frequency ? record.mode : frequency === 'once' ? 'goal' : 'obligation', priority: record?.priority ?? 1, state: record?.state ?? 'active' }, reserveAmount!)
+      await savePlanWithReserve({ ...record, kind: 'envelope', name: name.trim(), target: textToCents(budget)!, frequency, due: date || undefined, mode: record && record.frequency === frequency ? record.mode : frequency === 'once' ? 'goal' : 'obligation', priority: record?.priority ?? 1, state: record?.state ?? 'active' }, record ? current : reserveAmount!)
       toast(record ? 'План сохранён' : 'План создан'); onClose()
     } catch (error) { toast((error as Error).message) }
     finally { saving.current = false; setBusy(false) }
@@ -111,17 +146,18 @@ function SimplePlan({ record, onClose, onAdvanced }: { record?: PlanningRecord; 
         <label className="block space-y-2 text-[14px] text-mist">Нужный бюджет<input aria-label="Нужный бюджет" className={field} inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="Сумма, EUR" /></label>
         <label className="block space-y-2 text-[14px] text-mist">Периодичность<select aria-label="Периодичность" className={field} value={frequency} onChange={(e) => { const value = e.target.value as typeof frequency; setFrequency(value); if (value === 'once' && !record) setDate('') }}>{Object.entries(frequencies).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="block space-y-2 text-[14px] text-mist">{frequency === 'once' ? 'Дата (необязательно)' : 'Дата платежа'}<input type="date" aria-label="Дата платежа" className={field} value={date} onChange={(e) => setDate(e.target.value)} /></label>
-        <label className="block space-y-2 text-[14px] text-mist">{record ? 'Сколько оставить в резерве?' : 'Сколько зарезервировать сейчас?'}<input aria-label="Зарезервировать сейчас" className={field} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></label>
+        {!record && <><label className="block space-y-2 text-[14px] text-mist">{record ? 'Сколько оставить в резерве?' : 'Сколько зарезервировать сейчас?'}<input aria-label="Зарезервировать сейчас" className={field} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></label>
         <Card className="space-y-2 p-4 text-[13px]">
           <p className="flex justify-between gap-2"><span className="text-mist">{projected.pending.length ? 'Свободно с учётом заявок' : 'Свободно до распределения'}</span><span className="num">{projected.free === null ? '—' : fmt(projected.free)}</span></p>
           <p className="flex justify-between gap-2"><span className="text-mist">{record ? 'Новый резерв плана' : 'В резерв нового плана'}</span><span className="num text-iris">{fmt(reserveAmount ?? 0)}</span></p>
           <p className="flex justify-between gap-2"><span className="text-mist">Останется свободно</span><span className={'num font-semibold ' + ((remaining ?? 0) < 0 ? 'text-expense' : 'text-income')}>{remaining === null ? '—' : fmt(remaining)}</span></p>
         </Card>
         {change > 0 && (remaining === null || remaining < 0) && <p role="alert" className="text-[13px] text-expense">{remaining === null ? 'Сначала укажите фактический остаток в настройках планирования.' : 'Эта сумма превышает свободный остаток.'}</p>}
+        </>}
       </fieldset>
       <PrimaryButton disabled={busy || !valid} onClick={save}>{record ? 'Сохранить изменения' : 'Создать план'}</PrimaryButton>
       {record && <><button disabled={busy} onClick={onAdvanced} className="press min-h-11 w-full text-[14px] text-iris">Другие действия с резервом</button><button disabled={busy} onClick={remove} className="press min-h-11 w-full text-[14px] text-expense">Удалить план</button></>}
-      {!!requests.length && <p className="text-[12px] text-amber">Изменение резерва ожидает проверки. Подробности — в настройках планирования.</p>}
+      {!!requests.length && <p className="text-[12px] text-amber">Изменение резерва сохранено локально и ожидает синхронизации.</p>}
       <button disabled={busy} onClick={onClose} className="press h-12 w-full text-[15px] text-mist">Отмена</button>
     </div>
   </Sheet>

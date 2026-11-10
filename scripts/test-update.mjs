@@ -11,6 +11,7 @@ assert(chrome, 'Set CHROME_PATH')
 mkdirSync('node_modules/.cache', { recursive: true })
 const work = mkdtempSync(resolve('node_modules/.cache/update-regression-'))
 let local = false
+let generation = 1
 const cache = new Map()
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.webmanifest': 'application/manifest+json', '.wasm': 'application/wasm' }
 const server = createServer(async (req, res) => {
@@ -29,7 +30,7 @@ const server = createServer(async (req, res) => {
     }
     const path = resolve('dist', url.pathname.slice('/Financy/'.length) || 'index.html')
     if (!path.startsWith(resolve('dist') + sep) || !existsSync(path)) { res.writeHead(404).end(); return }
-    res.setHeader('Content-Type', types[extname(path)] || 'application/octet-stream'); res.end(readFileSync(path))
+    res.setHeader('Content-Type', types[extname(path)] || 'application/octet-stream'); res.end(extname(path) === '.js' && path.endsWith('sw.js') ? Buffer.concat([readFileSync(path), Buffer.from('\n// synthetic update generation ' + generation)]) : readFileSync(path))
   } catch { res.writeHead(502).end() }
 })
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
@@ -43,10 +44,11 @@ try {
   const targets = await (await fetch(`http://127.0.0.1:${readFileSync(active, 'utf8').split('\n')[0]}/json`)).json()
   ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl)
   await new Promise((r) => ws.addEventListener('open', r, { once: true }))
-  let seq = 0
+  let seq = 0, mainNavigations = 0
   const pending = new Map()
   ws.addEventListener('message', (event) => {
     const m = JSON.parse(event.data), p = pending.get(m.id)
+    if (m.method === 'Page.frameNavigated' && !m.params.frame.parentId) mainNavigations++
     if (!p) return
     pending.delete(m.id); clearTimeout(p.timer)
     m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result)
@@ -71,6 +73,30 @@ try {
   assert.equal(await js(snapshot), before, 'Existing stores changed during PWA/schema upgrade')
   assert(await js(`new Promise(resolve=>{const q=indexedDB.open('finance');q.onsuccess=()=>{const d=q.result,r=d.transaction('meta').objectStore('meta').get('syncDevice');r.onsuccess=async()=>{const key=r.result.privateKey;const signature=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},key,new TextEncoder().encode('synthetic-update-proof'));d.close();resolve(!key.extractable && signature.byteLength>0)}}})`), 'Pairing key lost after update')
   console.log('PASS published-app → local-planning PWA update: operations, clients, categories, history, settings and non-extractable pairing key preserved')
+  // Exercise the NEW update controller as well as the published app's older one.
+  await js(`new Promise(resolve=>{const q=indexedDB.open('finance');q.onsuccess=()=>{const d=q.result,t=d.transaction('planning','readwrite'),now=new Date().toISOString(),common={currency:'EUR',createdAt:now,updatedAt:now};for(const r of [{...common,id:'update-balance',kind:'balance',amount:100000,at:now},{...common,id:'update-plan',kind:'envelope',name:'Synthetic preserved plan',target:80000,priority:1,mode:'goal',frequency:'once',state:'active'},{...common,id:'update-reserve',kind:'movement',amount:10000,from:null,to:'update-plan',status:'pending'}])t.objectStore('planning').put(r);t.oncomplete=()=>{d.close();resolve(true)}}})`)
+  const planningSnapshot = `new Promise(resolve=>{const q=indexedDB.open('finance');q.onsuccess=()=>{const d=q.result,r=d.transaction('planning').objectStore('planning').getAll();r.onsuccess=()=>{d.close();resolve(JSON.stringify(r.result))}}})`
+  const planningBefore = await js(planningSnapshot)
+  await cdp('Page.reload'); await until("!!document.querySelector('main')")
+  generation++
+  await js('navigator.serviceWorker.getRegistration().then(r=>r.update())')
+  await until("document.body.innerText.includes('Доступна новая версия')")
+  await js(`[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Планирование').click()`)
+  await until("!!document.querySelector('button[aria-label=\"Открыть план Synthetic preserved plan\"]')")
+  await js(`[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Открыть план Synthetic preserved plan').click(); const input=document.querySelector('input[aria-label="Сумма резерва Synthetic preserved plan"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'50');input.dispatchEvent(new Event('input',{bubbles:true}))`)
+  await until("!!document.querySelector('[data-pending-input=\"true\"]')")
+  await js(`window.__confirmCount=0;window.confirm=()=>{window.__confirmCount++;return false};[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Обновить').click()`)
+  assert.equal(await js('window.__confirmCount'),1,'Inline unsaved input was not protected')
+  assert(await js(`!!document.querySelector('[data-pending-input="true"]')`),'Cancelled update lost input')
+  await js(`window.confirm=()=>true;const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Обновить');b.click();b.click()`)
+  await until("!!document.querySelector('button[aria-label=\"Планирование\"]') && !document.querySelector('[data-pending-input=\"true\"]') && !document.body.innerText.includes('Доступна новая версия')")
+  assert.equal(await js(planningSnapshot),planningBefore,'Planning records changed during update')
+  assert.equal(await js(snapshot),before,'Financial stores changed during second update')
+  const settledNavigations = mainNavigations
+  await new Promise(r=>setTimeout(r,1200))
+  assert.equal(mainNavigations, settledNavigations, 'Update repeated a reload without user action')
+  assert(await js('!!document.querySelector("main")'),'Update entered a reload loop')
+  console.log('PASS new update controller: prompt, unsaved inline input warning/cancel, duplicate update click, preserved planning and financial data')
   await cdp('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 })
   await cdp('Page.reload'); await until("!!document.querySelector('button[aria-label=\"Планирование\"]')")
   assert.equal(await js(snapshot), before)

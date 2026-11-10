@@ -8,7 +8,13 @@ import { toast } from '../lib/toast'
 import { dayLabel, fmt, plural } from '../lib/format'
 import type { OpType } from '../lib/types'
 import { Card, CategoryIcon, ChevronLeft, ICONS, IconButton, PrimaryButton, Segmented, Sheet } from '../components/ui'
+import { useAppUpdate, applyUpdate, checkForUpdate } from '../lib/updates'
 import { SyncSection } from '../components/SyncSection'
+
+function AppUpdates() {
+  const state = useAppUpdate()
+  return <Card className="space-y-2 p-4"><p className="text-[15px] font-medium">Обновления приложения</p><button className="glass press min-h-11 w-full rounded-2xl px-3 text-[14px] text-iris" disabled={state.checking || state.applying} onClick={() => { void (state.available ? applyUpdate() : checkForUpdate(true)) }}>{state.applying ? 'Обновление…' : state.checking ? 'Проверка…' : state.available ? 'Обновить' : 'Проверить обновления'}</button>{state.error && <p role="status" className="text-[13px] text-amber">{state.error}</p>}<p className="text-[12px] text-mist">Данные сохраняются. Проверка выполняется при открытом приложении.</p></Card>
+}
 
 const PALETTE = ['#3fe0c5', '#7c8cff', '#9f6bff', '#ffc56b', '#ff9f6b', '#ff6b81', '#6bc5ff', '#5ee08a', '#ff7ad9']
 
@@ -56,7 +62,7 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
         <Card className="space-y-4 p-4">
           <div className="flex items-center gap-3">
             <CategoryIcon cat={{ id: '', name, type, icon, color }} size={48} />
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Название" className="h-12 min-w-0 flex-1 rounded-xl bg-white/6 px-3.5 outline-none placeholder:text-fog" />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Название" className="glass h-12 min-w-0 flex-1 rounded-xl px-3.5 outline-none placeholder:text-fog" />
           </div>
           <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-8">
             {Object.keys(ICONS).map((k) => {
@@ -259,6 +265,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
             {i === 1 && <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />}
           </Fragment>))}
 
+          <AppUpdates />
           <Card className="space-y-3 p-4 text-[14px] text-mist">
             <p className="flex gap-3"><WifiOff size={18} className="mt-0.5 shrink-0" /> Работает без интернета, включая распознавание чеков, после первой загрузки.</p>
             <p>Safari и приложение на экране «Домой» хранят данные раздельно. Пользуйтесь установленной версией и регулярно сохраняйте резервную копию в «Файлы» или iCloud Drive.</p>

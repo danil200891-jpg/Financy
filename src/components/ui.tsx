@@ -31,7 +31,7 @@ export function CategoryIcon({ cat, size = 44 }: { cat?: Category | null; size?:
   const color = cat?.color ?? '#8b90a6'
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-[14px]"
+      className="glass-tint grid shrink-0 place-items-center rounded-[14px]"
       style={{ width: size, height: size, background: `linear-gradient(145deg, ${color}33, ${color}12)`, boxShadow: `inset 0 0 0 1px ${color}26` }}
     >
       <I size={size * 0.45} color={color} strokeWidth={1.9} />
@@ -48,7 +48,7 @@ export function Avatar({ client, size = 44 }: { client: Pick<Client, 'name' | 'c
     .toUpperCase()
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-full font-display font-medium"
+      className="glass-tint grid shrink-0 place-items-center rounded-full font-display font-medium"
       style={{
         width: size, height: size, fontSize: size * 0.32, color: client.color,
         background: `radial-gradient(circle at 30% 25%, ${client.color}40, ${client.color}10 70%)`,

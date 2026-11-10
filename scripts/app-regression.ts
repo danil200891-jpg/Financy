@@ -14,6 +14,7 @@ import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
 import { smoothSegments, smoothPath } from '../src/lib/sparkline'
 import { incomeSources } from '../src/lib/income-sources'
+import { watchUpdates, checkForUpdate } from '../src/lib/updates'
 import { financials, savePlan, savePlanWithReserve } from '../src/lib/planning'
 
 const wait = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -23,7 +24,7 @@ async function until(test: () => boolean | Promise<boolean>) {
   throw new Error('Timed out waiting for application state')
 }
 function button(text: string, root: ParentNode = document.querySelector('[role="dialog"]') ?? document) {
-  const result = [...root.querySelectorAll('button')].find((node) => node.textContent?.trim() === text || node.getAttribute('aria-label') === text || node.querySelector('p')?.textContent?.trim() === text || node.querySelector('span')?.textContent?.trim() === text)
+  const result = [...root.querySelectorAll('button')].filter((node) => !node.closest('[aria-hidden="true"]')).find((node) => node.textContent?.trim() === text || node.getAttribute('aria-label') === text || node.querySelector('p')?.textContent?.trim() === text || node.querySelector('span')?.textContent?.trim() === text)
   check(result && !result.disabled, `Missing enabled button ${text}`)
   return result
 }
@@ -31,7 +32,7 @@ async function click(text: string, root?: ParentNode) { button(text, root).click
 async function input(selector: string, value: string) {
   const element = document.querySelector<HTMLInputElement>(selector)
   check(element, `Missing input ${selector}`)
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value)
+  Object.getOwnPropertyDescriptor(element.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(element, value)
   element.dispatchEvent(new Event('input', { bubbles: true }))
   element.dispatchEvent(new Event('change', { bubbles: true }))
   await wait()
@@ -396,14 +397,24 @@ export async function runAppRegression() {
   const firstReserve = getState().planning.find((r) => r.kind === 'movement' && r.to === simple.id)!
   actions.savePlanning({ ...firstReserve, status: 'confirmed' }); await waitForWrites()
   await click('Открыть план Synthetic simple plan')
-  await input('input[aria-label="Зарезервировать сейчас"]', '600')
-  await click('Сохранить изменения'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(!document.querySelector('[role="dialog"]') && document.activeElement?.tagName !== 'INPUT', 'Plan tap opened a modal or keyboard')
+  await input('input[aria-label="Сумма резерва Synthetic simple plan"]', '999999')
+  check([...document.querySelectorAll<HTMLButtonElement>('.plan-expansion.is-open button')].find((b) => b.textContent === 'Подтвердить резерв')?.disabled, 'Inline reserve exceeded free funds')
+  await input('input[aria-label="Сумма резерва Synthetic simple plan"]', '100')
+  check(document.querySelector('main')!.textContent!.includes('После пополнения'), 'Inline reserve preview missing')
+  const inlineSubmit = button('Подтвердить резерв'); inlineSubmit.click(); inlineSubmit.click()
+  await until(() => button('Открыть план Synthetic simple plan').getAttribute('aria-expanded') === 'false')
   const increase = getState().planning.find((r) => r.kind === 'movement' && r.to === simple.id && r.id !== firstReserve.id)!
   check(increase.amount === 10000, 'Reserve edit created full amount instead of delta')
   actions.savePlanning({ ...increase, status: 'confirmed' }); await waitForWrites()
   const freeBeforeDecrease = financials(getState().operations, getState().planning).free
   await click('Открыть план Synthetic simple plan')
-  await input('input[aria-label="Зарезервировать сейчас"]', '450')
+  await click('Уменьшить или перевести резерв')
+  await input('select[aria-label="Действие с резервом"]', 'set')
+  await input('input[aria-label="Сумма движения"]', '450')
+  await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  await click('Настройки плана Synthetic simple plan')
+  check(!document.querySelector('input[aria-label="Зарезервировать сейчас"]'), 'Metadata edit still mixes reserve input')
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1)
   await input('input[aria-label="Дата платежа"]', toDraft({ ...emptyForm(), amountText: '1', title: 'Synthetic', date: [tomorrow.getFullYear(), String(tomorrow.getMonth() + 1).padStart(2, '0'), String(tomorrow.getDate()).padStart(2, '0')].join('-') }, 'manual')!.date.slice(0, 10))
   await input('input[aria-label="Нужный бюджет"]', '900')
@@ -413,7 +424,7 @@ export async function runAppRegression() {
   actions.savePlanning({ ...decrease, status: 'confirmed' }); await waitForWrites()
   check(financials(getState().operations, getState().planning).reserves[simple.id] === 45000 && financials(getState().operations, getState().planning).free === freeBeforeDecrease! + 15000, 'Reserve reduction did not release exactly the delta')
   check(getState().planning.find((r) => r.id === simple.id)?.target === 90000, 'Budget edit was lost')
-  await click('Открыть план Synthetic simple plan')
+  await click('Настройки плана Synthetic simple plan')
   const confirm = window.confirm; window.confirm = () => true
   await click('Удалить план'); await until(() => !document.querySelector('[role="dialog"]'))
   window.confirm = confirm
@@ -422,7 +433,24 @@ export async function runAppRegression() {
   check(release.amount === 45000, 'Deleting plan did not request exact remaining reserve release')
   actions.savePlanning({ ...release, status: 'confirmed' }); await waitForWrites()
   check(financials(getState().operations, getState().planning).reserves[simple.id] === 0 && !document.querySelector('main')!.textContent!.includes('Synthetic simple plan'), 'Closed empty plan did not move to archive')
-  console.log('PASS simple-plan create, live budget, reserve increase/reduction, date/budget edit, safe deletion and archive; no financial operations manufactured')
+  console.log('PASS inline plan expansion without keyboard/modal, preview, insufficient funds, duplicate-tap guard, automatic collapse, reserve reduction, independent metadata edit and safe archive')
+
+  let updateChecks = 0
+  watchUpdates({ update: async () => { updateChecks++ } } as unknown as ServiceWorkerRegistration)
+  await wait(); check(updateChecks === 1, 'Startup did not check for an update')
+  const realNow = Date.now
+  try {
+    Date.now = () => realNow() + 16000
+    document.dispatchEvent(new Event('visibilitychange')); await wait()
+    check(Number(updateChecks) === 2, 'Foreground did not check for an update')
+    window.dispatchEvent(new Event('pageshow')); await wait()
+    check(Number(updateChecks) === 2, 'Foreground events caused duplicate update checks')
+    window.dispatchEvent(new Event('online')); await wait()
+    check(Number(updateChecks) === 3, 'Reconnect did not check for an update')
+    await checkForUpdate(true)
+    check(Number(updateChecks) === 4, 'Manual update check did not run')
+  } finally { Date.now = realNow }
+  console.log('PASS PWA update checks at startup, foreground, online and manual request; duplicate foreground events throttled')
 
   const start = performance.now()
   const seed: Operation[] = Array.from({ length: 10000 }, (_, index) => ({
