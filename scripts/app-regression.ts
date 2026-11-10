@@ -12,6 +12,7 @@ import { parseRecognized } from '../src/lib/receipt'
 import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
+import { incomeSources } from '../src/lib/income-sources'
 
 const wait = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -112,8 +113,12 @@ export async function runAppRegression() {
   await actions.wipeAll() // Only this isolated test database is reset.
   createRoot(document.getElementById('root')!).render(createElement(App))
   await until(() => !!document.querySelector('main'))
-  await click('Текстом')
-  await input('input[placeholder="Mercadona -42 €"]', 'Synthetic UI -12,34 €')
+  check(document.querySelectorAll('nav button').length === 4 && !document.querySelector('button[aria-label="Добавить операцию"]'), 'Bottom navigation still has central add button')
+  await click('Расход')
+  check(!document.querySelector('[role="dialog"] input') && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? ''), 'Expense chooser opens a keyboard or form')
+  await click('Вручную')
+  await input('input[aria-label="Название"]', 'Synthetic UI')
+  await input('input[aria-label="Сумма"]', '12,34')
   const saveButton = button('Сохранить расход')
   saveButton.click(); saveButton.click()
   await until(() => !document.querySelector('[role="dialog"]'))
@@ -147,6 +152,38 @@ export async function runAppRegression() {
   await closeSheet(); await click('Назад')
   console.log('PASS primary navigation, add/edit/delete/cancel/restore, duplicate-tap guard, client/category forms and analytics filters')
 
+  const sourceRecord = (id: string, title: string, type: OpType = 'income'): Operation => ({ ...draft(title, 100, type), id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+  const sampleSources = [sourceRecord('a', '  Real  Company '), sourceRecord('b', 'REAL company'), sourceRecord('c', 'One use'), sourceRecord('d', 'Expense only', 'expense'), sourceRecord('e', 'Expense only', 'expense'), { ...sourceRecord('f', 'One use'), deletedAt: new Date().toISOString() }]
+  const suggestions = incomeSources([...sampleSources, sampleSources[0]])
+  check(suggestions.length === 1 && suggestions[0].count === 2, 'Source threshold, normalization or duplicate ID handling failed')
+  check(incomeSources(sampleSources, ' company ').length === 1 && !incomeSources(sampleSources, 'missing').length, 'Source filtering failed')
+  const beforeIncome = getState().operations.length
+  for (let index = 0; index < 2; index++) {
+    await click('Доход')
+    check(document.querySelector<HTMLInputElement>('input[aria-label="Название"]')?.value === '', 'Income source was prefilled')
+    check(!document.querySelector('[aria-label="Подсказки источников дохода"]'), 'Source suggested before two saved incomes')
+    await input('input[aria-label="Сумма"]', String(20 + index))
+    await input('input[aria-label="Название"]', index ? ' synthetic   SOURCE ' : 'Synthetic Source')
+    const saveIncome = button('Сохранить доход'); saveIncome.click(); saveIncome.click()
+    await until(() => !document.querySelector('[role="dialog"]'))
+  }
+  check(getState().operations.length === beforeIncome + 2 && getState().operations.filter((operation) => operation.type === 'income').length === 2, 'Income flow duplicated or changed operation type')
+  await actions.reload()
+  await click('Доход')
+  check(document.querySelector<HTMLInputElement>('input[aria-label="Название"]')?.value === '', 'Suggestion automatically inserted')
+  check(document.querySelectorAll('[aria-label="Подсказки источников дохода"] button').length === 1, 'Saved normalized source missing or duplicated')
+  await input('input[aria-label="Название"]', 'No match')
+  check(!document.querySelector('[aria-label="Подсказки источников дохода"]'), 'Nonmatching suggestions remained visible')
+  await input('input[aria-label="Название"]', 'source')
+  ;(document.querySelector('[aria-label="Подсказки источников дохода"] button') as HTMLButtonElement).click(); await wait()
+  check(document.querySelector<HTMLInputElement>('input[aria-label="Название"]')!.value.toLowerCase() === 'synthetic source', 'Explicit suggestion selection failed')
+  await click('Назад')
+  check(getState().operations.length === beforeIncome + 2, 'Cancelling income form saved data')
+  await click('Расход'); await click('Вручную'); await click('Назад')
+  check(button('Камера') && button('Из фото') && button('Вручную'), 'Expense back navigation failed')
+  await click('Назад')
+  console.log('PASS income/expense entry, four-tab navigation, keyboard-free chooser, saved-source threshold/filter/selection, back and double-tap protection')
+
   toast('Synthetic persistent update', { label: 'Synthetic update', run: () => false }, 0)
   toast('Synthetic transient', undefined, 20); await wait(60)
   check(document.body.textContent?.includes('Synthetic persistent update'), 'Update prompt lost behind transient toast')
@@ -164,16 +201,16 @@ export async function runAppRegression() {
   const fileInput = document.getElementById('receipt-image-input') as HTMLInputElement
   const originalClick = fileInput.click
   fileInput.click = () => { filePickerClicks++ }
-  await click('Из фото')
+  await click('Расход'); await click('Из фото')
   check(filePickerClicks === 1, 'Gallery not opened synchronously from user action')
   fileInput.click = originalClick
   await closeSheet()
-  await click('Камера')
+  await click('Расход'); await click('Камера')
   await until(() => (document.querySelector('video')?.videoWidth ?? 0) > 0)
   const track = (document.querySelector('video')!.srcObject as MediaStream).getVideoTracks()[0]
   await click('Закрыть камеру'); check(track.readyState === 'ended', 'Camera track leaked after close')
   await closeSheet()
-  await click('Из фото')
+  await click('Расход'); await click('Из фото')
   const receipt = document.createElement('canvas'); receipt.width = 1000; receipt.height = 650
   const context = receipt.getContext('2d')!; context.fillStyle = 'white'; context.fillRect(0, 0, 1000, 650); context.fillStyle = 'black'; context.font = '48px Arial'
   ;['MERCADONA', 'TOTAL 42,00 EUR'].forEach((line, index) => context.fillText(line, 50, 150 + index * 180))

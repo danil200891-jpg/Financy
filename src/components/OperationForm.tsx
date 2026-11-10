@@ -4,6 +4,7 @@ import type { OpType } from '../lib/types'
 import { findDuplicate, useStore, type OperationDraft } from '../lib/store'
 import { dayLabel, fmt, toDateInput } from '../lib/format'
 import { Avatar, CategoryIcon, Segmented } from './ui'
+import { incomeSources } from '../lib/income-sources'
 
 /** Amount is edited as text ("42,50") and converted to cents on save. */
 export interface FormValue {
@@ -45,10 +46,12 @@ export const emptyForm = (): FormValue => ({
   type: 'expense', amountText: '', title: '', categoryId: null, clientId: null, date: toDateInput(new Date().toISOString()), note: '',
 })
 
-export function OperationForm({ value, onChange, ignoreId, flags }: {
+export function OperationForm({ value, onChange, ignoreId, flags, fixedType, suggestSources = false }: {
   value: FormValue
   onChange: (v: FormValue) => void
   ignoreId?: string
+  fixedType?: boolean
+  suggestSources?: boolean
   /** fields the recognizer was unsure about — highlighted for confirmation */
   flags?: Partial<Record<'type' | 'amount' | 'title' | 'date', string>>
 }) {
@@ -57,6 +60,7 @@ export function OperationForm({ value, onChange, ignoreId, flags }: {
   const operations = useStore((s) => s.operations)
   const set = (p: Partial<FormValue>) => onChange({ ...value, ...p })
   const income = value.type === 'income'
+  const sources = useMemo(() => income && suggestSources ? incomeSources(operations, value.title).slice(0, 8) : [], [operations, value.title, income, suggestSources])
 
   const dup = useMemo(() => {
     const d = toDraft(value, 'manual')
@@ -68,14 +72,14 @@ export function OperationForm({ value, onChange, ignoreId, flags }: {
 
   return (
     <div className="space-y-5">
-      <div>
+      {!fixedType && <div>
         <Segmented
           value={value.type}
           onChange={(type) => set({ type, categoryId: cats.find((c) => c.id === value.categoryId)?.type === type ? value.categoryId : null })}
           options={[{ value: 'expense', label: 'Расход' }, { value: 'income', label: 'Доход' }]}
         />
         {flag('type')}
-      </div>
+      </div>}
 
       <div className="text-center">
         <div className={`flex items-baseline justify-center gap-1 font-display font-semibold tracking-[-0.03em] ${income ? 'text-income' : 'text-ink'}`}>
@@ -99,9 +103,16 @@ export function OperationForm({ value, onChange, ignoreId, flags }: {
           onChange={(e) => set({ title: e.target.value })}
           placeholder={income ? 'Источник дохода' : 'Магазин или получатель'}
           aria-label="Название"
+          autoComplete="off"
           className="glass h-14 w-full rounded-2xl px-4 outline-none placeholder:text-fog"
         />
         {flag('title')}
+        {sources.length > 0 && <div className="mt-3" aria-label="Подсказки источников дохода">
+          <p className="mb-2 px-1 text-[13px] text-mist">Частые источники</p>
+          <div className="flex flex-wrap gap-2">
+            {sources.map((source) => <button type="button" key={source.name} onClick={() => set({ title: source.name })} className="press min-h-11 max-w-full rounded-2xl bg-income/10 px-3.5 py-2 text-left text-[14px] text-income [overflow-wrap:anywhere]">{source.name}</button>)}
+          </div>
+        </div>}
       </div>
 
       {income && (

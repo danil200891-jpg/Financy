@@ -5,7 +5,7 @@ import type { Nav } from '../App'
 import { useStore } from '../lib/store'
 import { byPeriod, dailyCumulative, groupSum, totals } from '../lib/stats'
 import { cap, fmtShort, monthName, splitMoney } from '../lib/format'
-import { Avatar, Card, Empty, IconButton, ImageUp, Keyboard, OpRow, ScanLine } from '../components/ui'
+import { Avatar, Card, Empty, IconButton, OpRow } from '../components/ui'
 import { Sparkline } from '../components/charts'
 
 function greeting(d = new Date()) {
@@ -106,16 +106,15 @@ export function Home({ nav }: { nav: Nav }) {
 
       <BalanceCard net={t.net} income={t.income} expense={t.expense} spark={spark} />
 
-      {/* quick capture — sized for the thumb */}
-      <div className="mt-4 grid grid-cols-3 gap-2.5 px-4">
+      {/* Primary entry points — sized for the thumb. */}
+      <div className="mt-4 grid grid-cols-2 gap-3 px-4">
         {[
-          { label: 'Камера', Icon: ScanLine, mode: 'camera' as const },
-          { label: 'Из фото', Icon: ImageUp, mode: 'upload' as const },
-          { label: 'Текстом', Icon: Keyboard, mode: 'text' as const },
+          { label: 'Доход', Icon: ArrowDownLeft, mode: 'income' as const, color: 'text-income', surface: 'bg-income/10 ring-income/20' },
+          { label: 'Расход', Icon: ArrowUpRight, mode: 'expense' as const, color: 'text-expense', surface: 'bg-expense/10 ring-expense/20' },
         ].map((a) => (
-          <button key={a.mode} onClick={() => nav.openAdd(a.mode)} className="glass press flex flex-col items-center gap-2 rounded-[22px] py-4">
-            <a.Icon size={24} className="text-iris" strokeWidth={1.9} />
-            <span className="text-[14px] font-medium">{a.label}</span>
+          <button key={a.mode} onClick={() => nav.openAdd(a.mode)} className={`press flex min-h-[104px] items-center justify-center gap-3 rounded-[24px] ring-1 ring-inset ${a.surface} ${a.color}`}>
+            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/5"><a.Icon size={26} strokeWidth={2} /></span>
+            <span className="text-[18px] font-semibold">{a.label}</span>
           </button>
         ))}
       </div>
@@ -146,8 +145,7 @@ export function Home({ nav }: { nav: Nav }) {
         <Card className="mx-4 mt-7">
           <Empty
             title="Добавьте первую операцию"
-            text="Напишите «Mercadona -42 €», сфотографируйте чек или выберите скриншот"
-            action={<button onClick={() => nav.openAdd('text')} className="press rounded-2xl bg-white/10 px-5 py-3 text-[15px] font-semibold">Добавить операцию</button>}
+            text="Выберите «Доход» или «Расход», чтобы начать вести учёт"
           />
         </Card>
       )}

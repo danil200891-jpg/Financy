@@ -26,7 +26,7 @@ export default function App() {
   const [settings, setSettings] = useState(false)
 
   const nav: Nav = {
-    openAdd: (m = 'text') => {
+    openAdd: (m = 'expense') => {
       setAdd(m)
       // Keep the native file picker in the original user gesture on iOS.
       if (m === 'upload') (document.getElementById('receipt-image-input') as HTMLInputElement | null)?.click()
@@ -48,7 +48,7 @@ export default function App() {
         {tab === 'analytics' && <Analytics nav={nav} />}
       </main>
 
-      <TabBar tab={tab} onTab={nav.goTab} onAdd={() => nav.openAdd('text')} />
+      <TabBar tab={tab} onTab={nav.goTab} />
 
       {clientId && <ClientDetail id={clientId} nav={nav} onBack={() => setClientId(null)} />}
       {settings && <Settings onBack={() => setSettings(false)} />}

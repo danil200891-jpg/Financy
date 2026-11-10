@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, ChevronDown, ImageUp, RefreshCw, Sparkles, X, Zap } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronLeft, ImageUp, RefreshCw, Sparkles, X, Zap } from 'lucide-react'
 import { actions, findDuplicate, getState, waitForWrites, type OperationDraft } from '../lib/store'
 import { recognize as recognizeImage, warmUp } from '../lib/ocr'
-import { guessKind, parseRecognized } from '../lib/receipt'
-import { normalize, parseText } from '../lib/parse'
+import { parseRecognized } from '../lib/receipt'
+import { normalize } from '../lib/parse'
 import { fmt } from '../lib/format'
-import { Keyboard, PrimaryButton, ScanLine, Segmented, Sheet, lockBodyScroll } from '../components/ui'
+import { Keyboard, PrimaryButton, ScanLine, Sheet, lockBodyScroll } from '../components/ui'
 import { OperationForm, centsToText, emptyForm, toDraft, type FormValue } from '../components/OperationForm'
 
-export type AddMode = 'text' | 'camera' | 'upload'
+export type AddMode = 'income' | 'expense' | 'manual' | 'camera' | 'upload'
 type Flags = Partial<Record<'type' | 'amount' | 'title' | 'date', string>>
-
-const EXAMPLES = ['MVP +350 €', 'Mercadona -42 €', 'Amazon 29,90 расход', 'Съёмка мероприятия 500 доход']
 
 /** Fills category from the latest operation with the same title — learning from history. */
 function guessCategory(title: string, type: FormValue['type'], clientId: string | null) {
@@ -154,7 +152,6 @@ function Scanning({ image, progress }: { image: string; progress: number }) {
 /* ---------------- sheet ---------------- */
 
 export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMode: (m: AddMode) => void; onClose: () => void }) {
-  const [text, setText] = useState('')
   const [form, setForm] = useState<FormValue>(emptyForm)
   const [flags, setFlags] = useState<Flags>({})
   const [cameraOpen, setCameraOpen] = useState(false)
@@ -182,28 +179,17 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
     clearTimeout(savedTimer.current)
     saving.current = false
     setBusy(false); setSaved(null); setCameraOpen(false)
-    setText(''); setForm(emptyForm()); setFlags({}); setImage(null); setStage('idle')
+    setForm({ ...emptyForm(), type: mode === 'income' ? 'income' : 'expense' }); setFlags({}); setImage(null); setStage('idle')
     setOcrError(null); setRawText(''); setShowRaw(false); setDupOk(false)
   }
 
   useEffect(() => {
     if (!mode) { reset(); return }
     reset()
-    if (mode !== 'text') warmUp() // load OCR engine while the user aims the camera
+    if (mode === 'camera' || mode === 'upload') warmUp()
     if (mode === 'camera') setCameraOpen(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
-
-  const onText = (t: string) => {
-    setText(t)
-    setDupOk(false)
-    setFlags({})
-    if (!t.trim()) return setForm(emptyForm())
-    const p = parseText(t, getState().clients)
-    const type = p.type ?? 'expense'
-    setForm((f) => ({ ...f, type, amountText: centsToText(p.amount), title: p.title, clientId: p.clientId, categoryId: guessCategory(p.title, type, p.clientId) }))
-    setFlags(p.typeGuessed ? { type: 'Тип не указан — проверьте доход или расход' } : {})
-  }
 
   const recognize = async (img: string) => {
     recognition.current?.abort()
@@ -218,18 +204,17 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
       const { text, confidence } = await recognizeImage(img, (p) => run === runId.current && setProgress(p), controller.signal)
       if (run !== runId.current) return
       const { clients, operations } = getState()
-      const kind = mode === 'camera' ? 'receipt' : guessKind(text)
       const titles = [...new Set(operations.map((o) => o.title))]
-      const r = parseRecognized(text, kind, clients, titles)
+      const r = parseRecognized(text, 'receipt', clients, titles)
       const f: Flags = { ...r.flags }
       if (confidence < 55 && !f.amount) f.amount = 'Текст распознан неуверенно — сверьте сумму с изображением'
       setForm({
         ...emptyForm(),
-        type: r.type,
+        type: 'expense',
         amountText: centsToText(r.amount),
         title: r.title,
-        clientId: r.type === 'income' ? r.clientId : null,
-        categoryId: r.title ? guessCategory(r.title, r.type, r.clientId) : null,
+        clientId: null,
+        categoryId: r.title ? guessCategory(r.title, 'expense', null) : null,
         date: r.date ?? emptyForm().date,
         currency: r.currency,
       })
@@ -264,50 +249,38 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
   }
 
   const draftOk = !!toDraft(form, 'manual')
-  const showForm = mode === 'text' || stage === 'review'
+  const showForm = mode === 'income' || mode === 'manual' || stage === 'review'
+  const back = () => {
+    if (saving.current) return
+    if (mode === 'income' || mode === 'expense') onClose()
+    else onMode('expense')
+  }
 
   return (
     <>
       <Sheet open={!!mode && !cameraOpen} onClose={() => { if (!saving.current) onClose() }} full>
         <div className="px-5 pt-2">
-          <Segmented
-            value={mode ?? 'text'}
-            onChange={(value) => {
-              if (saving.current) return
-              if (value === 'upload') fileRef.current?.click()
-              onMode(value)
-            }}
-            options={[
-              { value: 'text', label: 'Текстом' },
-              { value: 'camera', label: 'Камера' },
-              { value: 'upload', label: 'Из фото' },
-            ]}
-          />
+          <div className="flex items-center gap-3">
+            <button aria-label="Назад" disabled={busy || !!saved} onClick={back} className="glass press grid h-11 w-11 shrink-0 place-items-center rounded-full disabled:opacity-40"><ChevronLeft size={22} /></button>
+            <h2 className="text-[22px] font-semibold">{mode === 'income' ? 'Новый доход' : mode === 'expense' ? 'Добавить расход' : stage === 'review' ? 'Проверка расхода' : 'Новый расход'}</h2>
+          </div>
 
-          {mode === 'text' && (
-            <div className="mt-5">
-              <label className="glass flex items-center gap-3 rounded-[22px] px-4 py-1.5 focus-within:shadow-[0_0_0_2px_rgba(124,140,255,0.6)]">
-                <Keyboard size={20} className="shrink-0 text-iris" />
-                <input
-                  autoFocus
-                  disabled={busy}
-                  value={text}
-                  onChange={(e) => onText(e.target.value)}
-                  placeholder="Mercadona -42 €"
-                  enterKeyHint="done"
-                  className="h-12 min-w-0 flex-1 bg-transparent outline-none placeholder:text-fog"
-                />
-                {text && <button aria-label="Очистить" onClick={() => onText('')}><X size={18} className="text-mist" /></button>}
-              </label>
-              {!text && (
-                <div className="no-scrollbar -mx-5 mt-3 flex gap-2 overflow-x-auto px-5">
-                  {EXAMPLES.map((e) => (
-                    <button key={e} onClick={() => onText(e)} className="glass press shrink-0 rounded-full px-3.5 py-1.5 text-[14px] text-mist">{e}</button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {mode === 'expense' && <div className="mt-6 space-y-3">
+            <p className="mb-5 text-[15px] text-mist">Сфотографируйте чек, выберите фото или заполните поля самостоятельно.</p>
+            {[
+              { mode: 'camera' as const, title: 'Камера', detail: 'Сфотографировать чек', Icon: ScanLine },
+              { mode: 'upload' as const, title: 'Из фото', detail: 'Выбрать чек из галереи', Icon: ImageUp },
+              { mode: 'manual' as const, title: 'Вручную', detail: 'Ввести данные расхода', Icon: Keyboard },
+            ].map((option) => <button key={option.mode} aria-label={option.title} onClick={() => {
+              onMode(option.mode)
+              // iOS requires the file picker to open within the user's tap.
+              if (option.mode === 'upload') fileRef.current?.click()
+            }} className="glass press flex min-h-[96px] w-full items-center gap-4 rounded-[24px] p-4 text-left">
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-[18px] bg-expense/10 text-expense"><option.Icon size={27} /></span>
+              <span className="min-w-0 flex-1"><span className="block text-[18px] font-semibold">{option.title}</span><span className="mt-1 block text-[14px] text-mist">{option.detail}</span></span>
+              <ChevronLeft size={19} className="rotate-180 text-fog" />
+            </button>)}
+          </div>}
 
           {(mode === 'camera' || mode === 'upload') && stage === 'idle' && (
             <div className="mt-8 flex flex-col items-center text-center">
@@ -353,7 +326,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
           {showForm && (
             <div className="mt-6">
               <fieldset disabled={busy}>
-                <OperationForm value={form} onChange={(v) => { setForm(v); setDupOk(false) }} flags={flags} />
+                <OperationForm value={form} onChange={(v) => { setForm(v); setDupOk(false) }} flags={flags} fixedType suggestSources={mode === 'income'} />
               </fieldset>
               <PrimaryButton className="mt-6" disabled={!draftOk || busy || !!saved} onClick={save}>
                 {dupOk ? 'Да, сохранить дубликат' : form.type === 'income' ? 'Сохранить доход' : 'Сохранить расход'}
@@ -379,7 +352,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
 
       {cameraOpen && (
         <CameraView
-          onClose={() => { setCameraOpen(false); if (stage === 'idle' && mode === 'camera') onMode('camera') }}
+          onClose={() => { setCameraOpen(false); if (stage === 'idle') onMode('expense') }}
           onCapture={(img) => { setCameraOpen(false); recognize(img) }}
         />
       )}
