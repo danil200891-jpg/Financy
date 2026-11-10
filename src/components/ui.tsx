@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Briefcase, Camera, Sparkles, ShoppingBasket, Coffee, ShoppingBag, Car, Home, Repeat, Heart, Tag,
-  Plane, Gift, GraduationCap, Dumbbell, Smartphone, Zap, PawPrint, Receipt, Wallet, ChevronLeft, ScanLine, ImageUp, Keyboard,
+  Plane, Gift, UserRound, GraduationCap, Dumbbell, Smartphone, Zap, PawPrint, Receipt, Wallet, ChevronLeft, ScanLine, ImageUp, Keyboard,
 } from 'lucide-react'
 import type { Category, Client, Operation } from '../lib/types'
 import { dayLabel, fmt, timeLabel } from '../lib/format'
@@ -10,7 +10,7 @@ export const ICONS: Record<string, typeof Tag> = {
   briefcase: Briefcase, camera: Camera, sparkles: Sparkles, basket: ShoppingBasket, coffee: Coffee,
   bag: ShoppingBag, car: Car, home: Home, repeat: Repeat, heart: Heart, tag: Tag, plane: Plane,
   gift: Gift, edu: GraduationCap, sport: Dumbbell, phone: Smartphone, bolt: Zap, pet: PawPrint,
-  receipt: Receipt, wallet: Wallet,
+  receipt: Receipt, wallet: Wallet, user: UserRound,
 }
 export { ChevronLeft, ScanLine, ImageUp, Keyboard }
 

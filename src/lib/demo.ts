@@ -2,8 +2,10 @@ import type { Category, Client, Operation } from './types'
 
 export const demoCategories: Category[] = [
   { id: 'c-work', name: 'Работа', type: 'income', icon: 'briefcase', color: '#3fe0c5' },
-  { id: 'c-photo', name: 'Съёмки', type: 'income', icon: 'camera', color: '#7c8cff' },
-  { id: 'c-other-in', name: 'Прочий доход', type: 'income', icon: 'sparkles', color: '#9f6bff' },
+  { id: 'c-other-in', name: 'Прочие доходы', type: 'income', icon: 'sparkles', color: '#9f6bff' },
+  { id: 'c-oneoff', name: 'Разовый клиент', type: 'income', icon: 'user', color: '#ffc56b' },
+  // kept (hidden) so older operations still show it; «Съёмки» now lives in the income switch
+  { id: 'c-photo', name: 'Съёмки', type: 'income', icon: 'camera', color: '#7c8cff', archived: true },
   { id: 'c-food', name: 'Продукты', type: 'expense', icon: 'basket', color: '#ffc56b' },
   { id: 'c-cafe', name: 'Кафе', type: 'expense', icon: 'coffee', color: '#ff9f6b' },
   { id: 'c-shop', name: 'Покупки', type: 'expense', icon: 'bag', color: '#ff6b81' },
@@ -46,10 +48,10 @@ export function buildDemoOperations(now = new Date()): Operation[] {
   // 11 months of history
   for (let m = 0; m < 11; m++) {
     const base = m * 30
-    push(base + 2, { type: 'income', amount: 180000 + Math.round(r() * 60000), title: 'MVP', categoryId: 'c-work', clientId: 'cl-mvp' })
+    push(base + 2, { type: 'income', amount: 180000 + Math.round(r() * 60000), title: 'MVP', categoryId: 'c-work', clientId: 'cl-mvp', incomeKind: 'work' })
     if (r() > 0.25) push(base + 9, { type: 'income', amount: 35000 + Math.round(r() * 40000), title: 'Nova Agency', categoryId: 'c-work', clientId: 'cl-nova' })
-    if (r() > 0.45) push(base + 16, { type: 'income', amount: 50000 + Math.round(r() * 30000), title: 'Съёмка мероприятия', categoryId: 'c-photo', clientId: 'cl-lumen' })
-    if (r() > 0.7) push(base + 21, { type: 'income', amount: 12000 + Math.round(r() * 20000), title: 'Портретная съёмка', categoryId: 'c-photo', clientId: null })
+    if (r() > 0.45) push(base + 16, { type: 'income', amount: 50000 + Math.round(r() * 30000), title: 'Съёмка мероприятия', categoryId: 'c-work', clientId: 'cl-lumen', incomeKind: 'shoot' })
+    if (r() > 0.7) push(base + 21, { type: 'income', amount: 12000 + Math.round(r() * 20000), title: 'Портретная съёмка', categoryId: 'c-oneoff', clientId: null, incomeKind: 'shoot' })
     if (m > 2 && r() > 0.5) push(base + 12, { type: 'income', amount: 40000 + Math.round(r() * 25000), title: 'Casa Verde', categoryId: 'c-work', clientId: 'cl-casa' })
 
     push(base + 1, { type: 'expense', amount: 95000, title: 'Аренда квартиры', categoryId: 'c-home', clientId: null })

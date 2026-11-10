@@ -16,10 +16,10 @@ function guessCategory(title: string, type: FormValue['type'], clientId: string 
   const { operations, categories } = getState()
   const t = normalize(title)
   const prev = operations.find((o) => o.type === type && (normalize(o.title) === t || (clientId && o.clientId === clientId)))
-  if (prev?.categoryId && categories.some((c) => c.id === prev.categoryId)) return prev.categoryId
+  if (prev?.categoryId && categories.some((c) => c.id === prev.categoryId && !c.archived)) return prev.categoryId
   // no history yet: only well-known merchants get a category, otherwise the user picks
   const hint = CATEGORY_HINTS.find(([re, , ty]) => ty === type && re.test(t))?.[1]
-  return hint && categories.some((c) => c.id === hint) ? hint : null
+  return hint && categories.some((c) => c.id === hint && !c.archived) ? hint : null
 }
 
 const CATEGORY_HINTS: [RegExp, string, FormValue['type']][] = [
@@ -29,7 +29,6 @@ const CATEGORY_HINTS: [RegExp, string, FormValue['type']][] = [
   [/repsol|cepsa|galp|shell|uber|cabify|bolt|renfe|taxi|bp$/, 'c-transport', 'expense'],
   [/spotify|netflix|icloud|apple|youtube|hbo|disney|vodafone|movistar|orange|digi/, 'c-subs', 'expense'],
   [/farmacia|pharmacy|аптека/, 'c-health', 'expense'],
-  [/съемк|фотосесси|shooting|photo/, 'c-photo', 'income'],
 ]
 
 /* ---------------- camera ---------------- */

@@ -1,10 +1,22 @@
-import { useMemo } from 'react'
-import { AlertTriangle, CalendarDays, UserRound } from 'lucide-react'
-import type { OpType } from '../lib/types'
-import { findDuplicate, useStore, type OperationDraft } from '../lib/store'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { AlertTriangle, CalendarDays, Check, ChevronDown, Plus, Search, UserRound } from 'lucide-react'
+import type { IncomeKind, Operation, OpType } from '../lib/types'
+import { actions, findClientByName, findDuplicate, useStore, waitForWrites, type OperationDraft } from '../lib/store'
 import { dayLabel, fmt, toDateInput } from '../lib/format'
-import { Avatar, CategoryIcon, Segmented } from './ui'
+import { normalize } from '../lib/parse'
+import { Avatar, CategoryIcon, Segmented, Sheet } from './ui'
 import { incomeSources } from '../lib/income-sources'
+
+export const INCOME_KINDS: { value: IncomeKind; label: string }[] = [
+  { value: 'work', label: 'Работа' }, { value: 'shoot', label: 'Съёмки' }, { value: 'oneoff', label: 'Разовый доход' },
+]
+
+/** Older incomes have no switch value: derive one for display/editing only (nothing is written until saved). */
+export function incomeKindOf(o: Pick<Operation, 'incomeKind' | 'categoryId' | 'clientId'>): IncomeKind {
+  if (o.incomeKind) return o.incomeKind
+  if (o.categoryId === 'c-photo') return 'shoot'
+  return o.clientId ? 'work' : 'oneoff'
+}
 
 /** Amount is edited as text ("42,50") and converted to cents on save. */
 export interface FormValue {
@@ -16,6 +28,7 @@ export interface FormValue {
   date: string // yyyy-mm-dd
   note: string
   currency?: string
+  incomeKind?: IncomeKind
 }
 
 export const centsToText = (c: number | null) => (c == null ? '' : (c / 100).toFixed(2).replace('.', ',').replace(/,00$/, ''))
@@ -39,6 +52,7 @@ export function toDraft(v: FormValue, source: OperationDraft['source'], keepTime
   return {
     type: v.type, amount, currency: v.currency ?? 'EUR', title: v.title.trim(), categoryId: v.categoryId,
     clientId: v.type === 'income' ? v.clientId : null, date, note: v.note.trim() || undefined, source,
+    ...(v.type === 'income' ? { incomeKind: v.incomeKind ?? 'work' } : {}),
   }
 }
 
@@ -56,7 +70,6 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
   flags?: Partial<Record<'type' | 'amount' | 'title' | 'date', string>>
 }) {
   const cats = useStore((s) => s.categories)
-  const clients = useStore((s) => s.clients)
   const operations = useStore((s) => s.operations)
   const set = (p: Partial<FormValue>) => onChange({ ...value, ...p })
   const income = value.type === 'income'
@@ -80,6 +93,10 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         />
         {flag('type')}
       </div>}
+
+      {income && (
+        <Segmented value={value.incomeKind ?? 'work'} onChange={(incomeKind) => set({ incomeKind })} options={INCOME_KINDS} />
+      )}
 
       <div className="text-center">
         <div className={`flex items-baseline justify-center gap-1 font-display font-semibold tracking-[-0.03em] ${income ? 'text-income' : 'text-ink'}`}>
@@ -115,33 +132,12 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         </div>}
       </div>
 
-      {income && (
-        <div>
-          <p className="mb-2 flex items-center gap-1.5 px-1 text-[14px] text-mist"><UserRound size={15} /> Клиент</p>
-          <div className="no-scrollbar -mx-5 flex gap-2 overflow-x-auto px-5">
-            <button
-              onClick={() => set({ clientId: null })}
-              className={`press shrink-0 rounded-full px-4 py-2 text-[14px] font-medium ${!value.clientId ? 'bg-white text-abyss' : 'glass text-mist'}`}
-            >
-              Разовый доход
-            </button>
-            {clients.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => set({ clientId: c.id })}
-                className={`press flex shrink-0 items-center gap-2 rounded-full py-1 pr-4 pl-1 text-[14px] font-medium ${value.clientId === c.id ? 'bg-white text-abyss' : 'glass text-ink'}`}
-              >
-                <Avatar client={c} size={30} /> {c.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {income && <ClientField value={value.clientId} onChange={(clientId) => set({ clientId })} />}
 
       <div>
         <p className="mb-2 px-1 text-[14px] text-mist">Категория</p>
         <div className="grid grid-cols-4 gap-2">
-          {cats.filter((c) => c.type === value.type).map((c) => {
+          {cats.filter((c) => c.type === value.type && (!c.archived || c.id === value.categoryId)).map((c) => {
             const on = value.categoryId === c.id
             return (
               <button
@@ -161,7 +157,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         <input
           value={value.note}
           onChange={(e) => set({ note: e.target.value })}
-          placeholder="Заметка"
+          placeholder="Заметка (необязательно)"
           className="glass h-12 min-w-0 rounded-2xl px-4 outline-none placeholder:text-fog"
         />
         <label className="glass relative flex h-12 items-center gap-2 rounded-2xl px-4 text-[15px]">
@@ -181,5 +177,81 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         </div>
       )}
     </div>
+  )
+}
+
+const CLIENT_COLORS = ['#7c8cff', '#3fe0c5', '#ffc56b', '#ff6b81', '#9f6bff', '#6bc5ff', '#ff9f6b', '#5ee08a']
+
+/** Client is optional. Tapping opens a searchable list; «+» creates (and selects) a client from the search text. */
+function ClientField({ value, onChange }: { value: string | null; onChange: (id: string | null) => void }) {
+  const clients = useStore((s) => s.clients)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const selected = clients.find((c) => c.id === value)
+  const q = normalize(query)
+  const list = clients
+    .filter((c) => !q || normalize(c.name).includes(q) || c.aliases?.some((a) => normalize(a).includes(q)))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  const exact = query.trim() ? findClientByName(query) : undefined
+  const close = () => { setOpen(false); setQuery('') }
+  const pick = (id: string | null) => { onChange(id); close() }
+  const add = async () => {
+    if (busy) return
+    if (!query.trim()) { inputRef.current?.focus(); return }
+    if (exact) return pick(exact.id)
+    setBusy(true)
+    try {
+      const c = actions.addClient(query, CLIENT_COLORS[clients.length % CLIENT_COLORS.length])
+      await waitForWrites()
+      pick(c.id)
+    } catch { /* the store already reported the failed write */ }
+    finally { setBusy(false) }
+  }
+  return (
+    <div>
+      <p className="mb-2 flex items-center gap-1.5 px-1 text-[14px] text-mist"><UserRound size={15} /> Клиент</p>
+      <button type="button" aria-label="Выбрать клиента" onClick={() => setOpen(true)} className="glass press flex h-14 w-full items-center gap-3 rounded-2xl px-3 text-left">
+        {selected ? <Avatar client={selected} size={34} /> : <NoClient />}
+        <span className={`min-w-0 flex-1 truncate text-[16px] ${selected ? '' : 'text-fog'}`}>{selected?.name ?? 'Без клиента'}</span>
+        <ChevronDown size={18} className="text-fog" />
+      </button>
+
+      <Sheet open={open} onClose={close} title="Клиент">
+        <div className="px-4 pt-3">
+          <div className="flex gap-2">
+            <label className="glass flex h-12 min-w-0 flex-1 items-center gap-2 rounded-2xl px-3.5">
+              <Search size={17} className="shrink-0 text-fog" />
+              <input ref={inputRef} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
+                placeholder="Поиск или новый клиент" aria-label="Поиск клиента" autoComplete="off" enterKeyHint="done"
+                className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-fog" />
+            </label>
+            <button type="button" aria-label="Добавить клиента" disabled={busy} onClick={add} className="press grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-iris/15 text-iris disabled:opacity-40">
+              <Plus size={22} />
+            </button>
+          </div>
+          {query.trim() && !exact && <p className="mt-2 px-1 text-[13px] text-mist">«+» добавит клиента «{query.trim().replace(/\s+/g, ' ')}»</p>}
+          <div className="glass mt-3 divide-y divide-line overflow-hidden rounded-[22px]">
+            {!q && <ClientRow label="Без клиента" on={!value} onClick={() => pick(null)} />}
+            {list.map((c) => <ClientRow key={c.id} label={c.name} on={value === c.id} onClick={() => pick(c.id)} avatar={<Avatar client={c} size={34} />} />)}
+            {q && !list.length && <p className="px-4 py-5 text-center text-[14px] text-mist">Клиент не найден</p>}
+            {!q && !clients.length && <p className="px-4 py-5 text-center text-[14px] text-mist">Клиентов пока нет. Введите имя и нажмите «+».</p>}
+          </div>
+        </div>
+      </Sheet>
+    </div>
+  )
+}
+
+const NoClient = () => <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-white/6 text-fog"><UserRound size={17} /></span>
+
+function ClientRow({ label, on, onClick, avatar }: { label: string; on: boolean; onClick: () => void; avatar?: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="press flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left">
+      {avatar ?? <NoClient />}
+      <span className="min-w-0 flex-1 truncate text-[16px]">{label}</span>
+      {on && <Check size={19} className="text-iris" />}
+    </button>
   )
 }

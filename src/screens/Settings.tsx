@@ -25,7 +25,7 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
       <div className="px-4 pt-3">
         <Segmented value={type} onChange={setType} options={[{ value: 'expense', label: 'Расходы' }, { value: 'income', label: 'Доходы' }]} />
         <Card className="mt-4 divide-y divide-line overflow-hidden">
-          {cats.filter((c) => c.type === type).map((c) => (
+          {cats.filter((c) => c.type === type && !c.archived).map((c) => (
             <div key={c.id} className="flex items-center gap-3.5 px-4 py-3">
               <CategoryIcon cat={c} size={40} />
               <p className="flex-1 text-[16px] font-medium">{c.name}</p>
@@ -39,6 +39,19 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
             </div>
           ))}
         </Card>
+
+        {cats.some((c) => c.type === type && c.archived) && <>
+          <p className="mt-6 mb-2 px-1 text-[15px] font-medium text-mist">Скрытые</p>
+          <Card className="divide-y divide-line overflow-hidden">
+            {cats.filter((c) => c.type === type && c.archived).map((c) => (
+              <div key={c.id} className="flex items-center gap-3.5 px-4 py-3">
+                <CategoryIcon cat={c} size={40} />
+                <p className="flex-1 text-[16px] font-medium text-mist">{c.name}</p>
+                <button onClick={() => actions.updateCategory(c.id, { archived: false })} className="press rounded-xl bg-white/8 px-3 py-2 text-[14px] font-medium text-iris">Показать</button>
+              </div>
+            ))}
+          </Card>
+        </>}
 
         <p className="mt-6 mb-2 px-1 text-[15px] font-medium text-mist">Новая категория</p>
         <Card className="space-y-4 p-4">

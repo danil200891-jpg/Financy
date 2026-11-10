@@ -6,7 +6,7 @@ import { toast } from '../lib/toast'
 import { dayLabel, fmt, timeLabel, toDateInput } from '../lib/format'
 import type { HistoryEntry, Operation } from '../lib/types'
 import { Card, PrimaryButton, Sheet } from '../components/ui'
-import { OperationForm, centsToText, emptyForm, toDraft, type FormValue } from '../components/OperationForm'
+import { OperationForm, centsToText, emptyForm, incomeKindOf, toDraft, type FormValue } from '../components/OperationForm'
 
 const SOURCE: Record<Operation['source'], string> = { manual: 'вручную', camera: 'с камеры', upload: 'из изображения', import: 'из резервной копии' }
 const ACTION: Record<HistoryEntry['action'], string> = { create: 'Создана', update: 'Изменена', delete: 'Удалена', restore: 'Восстановлена' }
@@ -21,6 +21,7 @@ function diff(before?: Partial<Operation>, after?: Partial<Operation>) {
   if (before.date?.slice(0, 10) !== after.date?.slice(0, 10)) out.push(`дата → ${dayLabel(after.date!).toLowerCase()}`)
   if (before.categoryId !== after.categoryId) out.push('категория')
   if (before.clientId !== after.clientId) out.push('клиент')
+  if (before.incomeKind && after.incomeKind && before.incomeKind !== after.incomeKind) out.push('вид дохода')
   if ((before.note ?? '') !== (after.note ?? '')) out.push('заметка')
   return out
 }
@@ -44,6 +45,7 @@ export function EditSheet({ id, onClose }: { id: string | null; onClose: () => v
     setForm({
       type: op.type, amountText: centsToText(op.amount), title: op.title, categoryId: op.categoryId,
       clientId: op.clientId, date: toDateInput(op.date), note: op.note ?? '', currency: op.currency,
+      incomeKind: op.type === 'income' ? incomeKindOf(op) : undefined,
     })
     let cancelled = false
     historyFor(op.id).then((entries) => { if (!cancelled) setLog(entries) }).catch(() => {})

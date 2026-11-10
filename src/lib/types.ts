@@ -1,5 +1,7 @@
 export type OpType = 'income' | 'expense'
 export type OpSource = 'manual' | 'camera' | 'upload' | 'import'
+/** Top-level income switch in the income form. Optional: older operations have none. */
+export type IncomeKind = 'work' | 'shoot' | 'oneoff'
 
 /**
  * Amounts are stored in cents to avoid float errors.
@@ -16,6 +18,7 @@ export interface Operation {
   clientId: string | null
   date: string // ISO date-time
   note?: string
+  incomeKind?: IncomeKind
   source: OpSource
   createdAt: string
   updatedAt: string
@@ -28,6 +31,8 @@ export interface Category {
   type: OpType
   icon: string // key from icon map
   color: string
+  /** Hidden from pickers but still shown on older operations that use it. */
+  archived?: boolean
   updatedAt?: string
   deletedAt?: string | null
 }
@@ -55,6 +60,8 @@ export interface HistoryEntry {
   at: string
   before?: unknown
   after?: unknown
+  /** set when the change came from another device through the PC sync server */
+  via?: 'sync'
 }
 
 export type Period = 'month' | 'year' | 'all'

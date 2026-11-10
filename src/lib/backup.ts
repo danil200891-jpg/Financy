@@ -115,6 +115,7 @@ function validOp(o: Operation) {
     && Number.isSafeInteger(o.amount) && o.amount > 0 && isStr(o.title) && isStr(o.date) && Number.isFinite(Date.parse(o.date))
     && (o.note === undefined || isStr(o.note)) && (o.clientId == null || isStr(o.clientId)) && (o.categoryId == null || isStr(o.categoryId))
     && (o.source === undefined || ['manual', 'camera', 'upload', 'import'].includes(o.source))
+    && (o.incomeKind === undefined || ['work', 'shoot', 'oneoff'].includes(o.incomeKind))
     && optionalDate(o.createdAt) && optionalDate(o.updatedAt) && optionalDate(o.deletedAt)
 }
 

@@ -128,6 +128,46 @@ export async function initStore() {
     data.categories = [...data.categories, ...cats]
   }
   setAll({ operations: data.operations, clients: data.clients, categories: data.categories })
+  await migrateIncomeCategories().catch(() => { /* retried on the next start; nothing is lost */ })
+}
+
+const INCOME_CATEGORIES = ['c-work', 'c-other-in', 'c-oneoff']
+
+/**
+ * One-time, non-destructive switch to the three income categories (Работа, Прочие доходы, Разовый клиент).
+ * Other income categories are only hidden (`archived`) — never deleted — so older operations keep
+ * showing them, and they can be brought back in Настройки → Категории.
+ */
+async function migrateIncomeCategories() {
+  const d = await DB.db()
+  if (await d.get('meta', 'incomeCategoriesV2')) return
+  const t = nowIso()
+  const puts: Category[] = []
+  const history: HistoryEntry[] = []
+  const change = (before: Category | undefined, after: Category) => {
+    puts.push(after)
+    history.push(hist('category', after.id, before ? 'update' : 'create', before, after))
+  }
+  for (const c of state.all.categories) {
+    if (c.type !== 'income' || c.deletedAt) continue
+    if (!INCOME_CATEGORIES.includes(c.id) && !c.archived) change(c, { ...c, archived: true, updatedAt: t })
+    else if (c.id === 'c-other-in' && c.name === 'Прочий доход') change(c, { ...c, name: 'Прочие доходы', updatedAt: t })
+  }
+  for (const id of INCOME_CATEGORIES) {
+    if (state.all.categories.some((c) => c.id === id)) continue
+    const def = demoCategories.find((c) => c.id === id)
+    if (def) change(undefined, { ...def, updatedAt: t, deletedAt: null })
+  }
+  if (puts.length) write('category', puts, history)
+  await waitForWrites()
+  await DB.setMeta('incomeCategoriesV2', t)
+}
+
+/** Client names compare without case, «ё» and extra spaces — «  mvp » and «MVP» are the same client. */
+export function findClientByName(name: string) {
+  const key = normalize(name)
+  if (!key) return undefined
+  return state.clients.find((c) => normalize(c.name) === key || c.aliases?.some((a) => normalize(a) === key))
 }
 
 export type OperationDraft = Omit<Operation, 'id' | 'createdAt' | 'updatedAt' | 'deletedAt'>
@@ -174,9 +214,12 @@ export const actions = {
     setAll({ ...state.all, operations: state.all.operations.filter((o) => !ids.includes(o.id) || !o.deletedAt) })
   },
 
+  /** Returns the existing client instead of creating a duplicate that differs only in case or spaces. */
   addClient(name: string, color: string) {
+    const existing = findClientByName(name)
+    if (existing) return existing
     const t = nowIso()
-    const c: Client = { id: uid('cl'), name: name.trim(), aliases: [], color, createdAt: t, updatedAt: t, deletedAt: null }
+    const c: Client = { id: uid('cl'), name: name.trim().replace(/\s+/g, ' '), aliases: [], color, createdAt: t, updatedAt: t, deletedAt: null }
     write('client', [c], [hist('client', c.id, 'create', undefined, c)])
     return c
   },
@@ -204,6 +247,12 @@ export const actions = {
     const cat: Category = { ...c, id: uid('c'), updatedAt: nowIso(), deletedAt: null }
     write('category', [cat], [hist('category', cat.id, 'create', undefined, cat)])
     return cat
+  },
+  updateCategory(id: string, patch: Partial<Omit<Category, 'id'>>) {
+    const before = state.all.categories.find((c) => c.id === id)
+    if (!before) return
+    const after = { ...before, ...patch, updatedAt: nowIso() }
+    write('category', [after], [hist('category', id, 'update', before, after)])
   },
   removeCategory(id: string) {
     const before = state.all.categories.find((c) => c.id === id)
