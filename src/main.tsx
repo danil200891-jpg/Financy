@@ -4,7 +4,6 @@ import './index.css'
 import App from './App'
 import { actions, initStore, waitForWrites } from './lib/store'
 import { toast } from './lib/toast'
-import { initDriveBackup } from './lib/drive-backup'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { initSync } from './lib/sync'
 
@@ -61,7 +60,6 @@ Promise.race([
     }
     document.addEventListener('visibilitychange', refreshData)
     setInterval(() => { if (calendarDay !== new Date().toDateString()) refreshData() }, 60000)
-    void initDriveBackup().catch(() => {})
     void initSync().catch((e) => console.warn('sync unavailable', e))
     boot?.stage('rendering')
     root.render(

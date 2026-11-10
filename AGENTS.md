@@ -1,6 +1,6 @@
 # Finance — guide for AI coding agents (Claude Code, ChatGPT Codex)
 
-Personal finance tracker PWA for iPhone. Free, offline-first, no backend, no accounts.
+Personal finance tracker PWA for iPhone. Free, offline-first, no cloud, no accounts. Optional sync with the user's own PC over home Wi-Fi (`sync-server/`).
 UI language: **Russian**. Code, comments and commit messages: English.
 
 ## Commands
@@ -23,6 +23,7 @@ Always run `npx tsc -b` and `npm run build` before finishing a change.
 - `src/lib/backup.ts` JSON backup/restore (merge or replace, undoable) and CSV export.
 - `src/lib/ocr.ts` Tesseract.js, fully local; assets in `public/ocr` (generated, git-ignored).
 - `src/lib/receipt.ts` OCR text → amount/date/merchant/type. `src/lib/parse.ts` manual text input parser.
+- `src/lib/sync/*` client for the PC sync server (pairing, signed requests, push/pull, conflicts). `sync-server/` plain-Node server (no deps): merge engine, weekly verified backups, Windows setup scripts. Tests: `npm run test:sync-server`, `npm run test:sync`.
 - `src/screens/*` screens, `src/components/*` shared UI. Design tokens live in `src/index.css` (`@theme`).
 
 ## Hard rules
@@ -34,12 +35,13 @@ Always run `npx tsc -b` and `npm run build` before finishing a change.
    - Keep the backup format backward compatible: bump `BACKUP_VERSION` and keep `parseBackup` able to read older files.
    - Deletions are soft (`deletedAt`); every write goes through `store.ts` so it lands in the `history` store.
 3. **Never invent recognized data.** If OCR/parsing can't find a field, leave it empty and set a flag for the user to confirm.
-4. **Privacy.** User data stays local except for explicitly connected Google Drive backups using only `drive.file`. No analytics or paid APIs. OAuth access tokens stay in memory, never in storage or logs. Never commit backups, CSV exports, `.cert/`, keys or `.env` (see `.gitignore`).
+4. **Privacy.** User data stays on the phone and, if the user pairs it, on their own PC (`sync-server`). No cloud, analytics or paid APIs. The device key is a non-extractable WebCrypto key; the server stores only public keys; never log record contents, keys or signatures. Never commit backups, CSV exports, `.cert/`, keys or `.env` (see `.gitignore`).
 5. **iOS Safari compatibility.** Build target is Safari 15. Avoid regex lookbehind `(?<=` `(?<!`, and keep the ES5 boot watchdog in `index.html` working.
 6. **Paths.** The app is served from a subpath on GitHub Pages. Use `import.meta.env.BASE_URL` (or `%BASE_URL%` in `index.html`) — never hard-code `/...` URLs.
 7. **Updates.** Service worker uses `registerType: 'prompt'`: a new version is offered with an «Обновить» toast; do not switch to auto-reload.
 8. Do not publish, push or create remote repositories without the user's explicit permission.
-9. **External network origins.** Production CSP permits the app origin and the Google Identity Services / Drive API endpoints used by opt-in backup. Load GIS directly from Google as required by its supported integration. Keep all other dependencies, fonts and OCR assets local. Do not expand external origins without a user request.
+9. **External network origins.** Production CSP permits only the app origin and `https://*:47821` (the user's PC sync server on the LAN). Keep dependencies, fonts and OCR assets local. Do not expand external origins without a user request.
+10. **Sync safety.** Never replace the phone database with the server's. Restores are applied as normal edits (`applyAsEdits`) so they sync. The server acknowledges a push only after a durable write and deletes only its own verified backups older than 30 days, always keeping the newest valid one.
 
 ## Working together (Claude Code + ChatGPT Codex on one repo)
 

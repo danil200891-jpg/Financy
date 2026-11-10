@@ -16,7 +16,6 @@ await build({
   configFile: false, logLevel: 'error',
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'), __APP_VERSION__: JSON.stringify('app-regression'),
-    'import.meta.env.VITE_GOOGLE_CLIENT_ID': JSON.stringify(''),
   },
   build: { outDir: output, lib: { entry: resolve('scripts/app-regression.ts'), formats: ['es'], fileName: () => 'test.js' } },
 })

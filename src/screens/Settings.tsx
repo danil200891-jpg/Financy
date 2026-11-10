@@ -8,9 +8,7 @@ import { toast } from '../lib/toast'
 import { dayLabel, fmt, plural } from '../lib/format'
 import type { OpType } from '../lib/types'
 import { Card, CategoryIcon, ChevronLeft, ICONS, IconButton, PrimaryButton, Segmented, Sheet } from '../components/ui'
-import { GoogleDriveBackup } from '../components/GoogleDriveBackup'
 import { SyncSection } from '../components/SyncSection'
-import { finishDriveRestore, completeDriveRestore } from '../lib/drive-backup'
 
 const PALETTE = ['#3fe0c5', '#7c8cff', '#9f6bff', '#ffc56b', '#ff9f6b', '#ff6b81', '#6bc5ff', '#5ee08a', '#ff7ad9']
 
@@ -145,7 +143,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const [cats, setCats] = useState(false)
   const [trash, setTrash] = useState(false)
   const [pending, setPending] = useState<Backup | null>(null)
-  const [fromDrive, setFromDrive] = useState(false)
   const [wipe, setWipe] = useState(false)
   const [canUndo, setCanUndo] = useState(false)
   const [usage, setUsage] = useState<string | null>(null)
@@ -178,8 +175,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
     try {
       const s = await restore(pending, mode)
       setPending(null)
-      if (fromDrive) await completeDriveRestore()
-      setFromDrive(false)
       toast(
         mode === 'replace'
           ? `Восстановлено ${s.added} ${plural(s.added, 'операция', 'операции', 'операций')}`
@@ -265,8 +260,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
           <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />
 
-          <GoogleDriveBackup onRestore={(backup) => { setFromDrive(true); setPending(backup) }} />
-
           <Card className="space-y-3 p-4 text-[14px] text-mist">
             <p className="flex gap-3"><WifiOff size={18} className="mt-0.5 shrink-0" /> Работает без интернета, включая распознавание чеков, после первой загрузки.</p>
             <p>Safari и приложение на экране «Домой» хранят данные раздельно. Пользуйтесь установленной версией и регулярно сохраняйте резервную копию в «Файлы» или iCloud Drive.</p>
@@ -285,7 +278,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
           e.target.value = ''
           if (!f) return
           try {
-            setFromDrive(false)
             setPending(parseBackup(await f.text()))
           } catch (err) {
             toast((err as Error).message)
@@ -294,7 +286,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
       />
 
       {pending && (
-        <Dialog onClose={() => { if (busy) return; setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }}>
+        <Dialog onClose={() => { if (!busy) setPending(null) }}>
           <p className="text-[17px] font-semibold">Восстановить копию?</p>
           <p className="mt-1 text-[14px] text-mist">
             Копия от {new Date(pending.exportedAt).toLocaleString('ru-RU')}: {pending.operations.filter((o) => !o.deletedAt).length} операций, {pending.clients.filter((c) => !c.deletedAt).length} клиентов.
@@ -304,11 +296,11 @@ export function Settings({ onBack }: { onBack: () => void }) {
               <p className="text-[16px] font-semibold">Объединить</p>
               <p className="text-[13px] text-mist">Добавить новое, дубликаты пропустить</p>
             </button>
-            {!fromDrive && <button disabled={busy} onClick={() => doRestore('replace')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">
+            <button disabled={busy} onClick={() => doRestore('replace')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">
               <p className="text-[16px] font-semibold text-amber">Заменить всё</p>
               <p className="text-[13px] text-mist">Текущие данные заменятся копией. Это можно отменить в настройках.</p>
-            </button>}
-            <button disabled={busy} onClick={() => { setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }} className="press h-12 w-full rounded-2xl font-medium text-mist">Отмена</button>
+            </button>
+            <button disabled={busy} onClick={() => setPending(null)} className="press h-12 w-full rounded-2xl font-medium text-mist">Отмена</button>
           </div>
         </Dialog>
       )}

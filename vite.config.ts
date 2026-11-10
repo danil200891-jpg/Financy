@@ -20,19 +20,18 @@ function builtBase() {
 }
 
 /**
- * Production CSP permits the local app and the Google endpoints required by the
- * optional Drive backup. OCR remains local, including its worker and language data.
+ * Production CSP: everything is local (app, fonts, OCR worker and language data). The only other
+ * destination is the user's own PC sync server on the home network (https://<pc>:47821).
  * 'wasm-unsafe-eval'/'unsafe-eval' are needed for the OCR WebAssembly engine on iOS Safari.
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://accounts.google.com/gsi/ https://apis.google.com/",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
   "worker-src 'self' blob:",
-  "connect-src 'self' blob: data: https://*:47821 https://accounts.google.com/gsi/ https://www.googleapis.com/drive/ https://www.googleapis.com/upload/drive/",
-  "frame-src https://accounts.google.com/gsi/ https://docs.google.com/picker",
+  "connect-src 'self' blob: data: https://*:47821",
   "img-src 'self' data: blob:",
   "media-src 'self' blob: mediastream:",
-  "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
+  "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "manifest-src 'self'",
   "object-src 'none'",

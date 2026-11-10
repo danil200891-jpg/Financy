@@ -14,7 +14,7 @@ mkdirSync('node_modules/.cache', { recursive: true })
 const work = mkdtempSync(resolve('node_modules/.cache/sync-regression-'))
 await build({
   configFile: false, logLevel: 'error',
-  define: { 'process.env.NODE_ENV': JSON.stringify('production'), __APP_VERSION__: JSON.stringify('sync-regression'), 'import.meta.env.VITE_GOOGLE_CLIENT_ID': JSON.stringify('') },
+  define: { 'process.env.NODE_ENV': JSON.stringify('production'), __APP_VERSION__: JSON.stringify('sync-regression') },
   build: { outDir: join(work, 'bundle'), lib: { entry: resolve('scripts/sync-regression.ts'), formats: ['es'], fileName: () => 'test.js' } },
 })
 const bundle = readFileSync(join(work, 'bundle', 'test.js'))
