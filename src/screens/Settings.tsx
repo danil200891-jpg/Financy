@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ChevronRight, Database, FileJson, FileSpreadsheet, FlaskConical, Plus, RotateCcw, Shapes, Trash2, Undo2, Upload, WifiOff,
 } from 'lucide-react'
-import { actions, useStore } from '../lib/store'
+import { actions, useStore, waitForWrites } from '../lib/store'
 import { exportCSV, exportJSON, getLastBackup, getPreRestore, parseBackup, restore, undoRestore, type Backup } from '../lib/backup'
 import { toast } from '../lib/toast'
 import { dayLabel, fmt, plural } from '../lib/format'
@@ -19,6 +19,7 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [name, setName] = useState('')
   const [icon, setIcon] = useState('tag')
   const [color, setColor] = useState(PALETTE[0])
+  const [busy, setBusy] = useState(false)
   return (
     <Sheet open={open} onClose={onClose} title="Категории" full>
       <div className="px-4 pt-3">
@@ -28,7 +29,11 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
             <div key={c.id} className="flex items-center gap-3.5 px-4 py-3">
               <CategoryIcon cat={c} size={40} />
               <p className="flex-1 text-[16px] font-medium">{c.name}</p>
-              <button aria-label={`Удалить ${c.name}`} onClick={() => { actions.removeCategory(c.id); toast(`Категория «${c.name}» удалена`) }} className="press p-2 text-fog">
+              <button aria-label={`Удалить ${c.name}`} onClick={async () => {
+                if (!window.confirm(`Удалить категорию «${c.name}»? Операции сохранятся без этой категории.`)) return
+                try { actions.removeCategory(c.id); await waitForWrites(); toast(`Категория «${c.name}» удалена`) }
+                catch { /* The store restores failed changes. */ }
+              }} className="press p-2 text-fog">
                 <Trash2 size={18} />
               </button>
             </div>
@@ -41,7 +46,7 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
             <CategoryIcon cat={{ id: '', name, type, icon, color }} size={48} />
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Название" className="h-12 min-w-0 flex-1 rounded-xl bg-white/6 px-3.5 outline-none placeholder:text-fog" />
           </div>
-          <div className="grid grid-cols-10 gap-1.5">
+          <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-8">
             {Object.keys(ICONS).map((k) => {
               const I = ICONS[k]
               return (
@@ -51,12 +56,18 @@ function CategoriesSheet({ open, onClose }: { open: boolean; onClose: () => void
               )
             })}
           </div>
-          <div className="flex justify-between">
+          <div className="no-scrollbar flex gap-2 overflow-x-auto py-1">
             {PALETTE.map((c) => (
-              <button key={c} aria-label={`Цвет ${c}`} onClick={() => setColor(c)} className="h-8 w-8 rounded-full" style={{ background: c, boxShadow: c === color ? `0 0 0 3px #12141f, 0 0 0 5px ${c}` : undefined }} />
+              <button key={c} aria-label={`Цвет ${c}`} onClick={() => setColor(c)} className="h-11 w-11 shrink-0 rounded-full" style={{ background: c, boxShadow: c === color ? `0 0 0 3px #12141f, 0 0 0 5px ${c}` : undefined }} />
             ))}
           </div>
-          <PrimaryButton disabled={!name.trim()} onClick={() => { actions.addCategory({ name: name.trim(), type, icon, color }); toast(`Категория «${name.trim()}» добавлена`); setName('') }}>
+          <PrimaryButton disabled={!name.trim() || busy} onClick={async () => {
+            if (busy) return
+            setBusy(true)
+            try { actions.addCategory({ name: name.trim(), type, icon, color }); await waitForWrites(); toast(`Категория «${name.trim()}» добавлена`); setName('') }
+            catch { /* Keep the category draft available. */ }
+            finally { setBusy(false) }
+          }}>
             <span className="inline-flex items-center gap-2"><Plus size={20} /> Добавить категорию</span>
           </PrimaryButton>
         </Card>
@@ -87,7 +98,11 @@ function TrashSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
               ))}
             </Card>
             <button
-              onClick={() => (sure ? (actions.purgeDeleted(), setSure(false), toast('Корзина очищена')) : setSure(true))}
+              onClick={async () => {
+                if (!sure) { setSure(true); return }
+                try { await actions.purgeDeleted(); setSure(false); toast('Корзина очищена') }
+                catch { toast('Не удалось очистить корзину. Данные сохранены, попробуйте снова.') }
+              }}
               className={`press mt-4 h-14 w-full rounded-[18px] text-[16px] font-medium ${sure ? 'bg-expense text-white' : 'text-expense'}`}
             >
               {sure ? `Удалить навсегда (${deleted.length})` : 'Очистить корзину'}
@@ -121,6 +136,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const [canUndo, setCanUndo] = useState(false)
   const [usage, setUsage] = useState<string | null>(null)
   const [lastBackup, setLastBackup] = useState<string | undefined>()
+  const mutation = useRef(false)
+  const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -133,13 +150,17 @@ export function Settings({ onBack }: { onBack: () => void }) {
     try {
       const r = await fn()
       if (r !== 'cancelled') toast(ok)
+      return r !== 'cancelled'
     } catch (e) {
       toast((e as Error).message || 'Не получилось. Попробуйте ещё раз.')
+      return false
     }
   }
 
   const doRestore = async (mode: 'merge' | 'replace') => {
-    if (!pending) return
+    if (!pending || mutation.current) return
+    mutation.current = true
+    setBusy(true)
     try {
       const s = await restore(pending, mode)
       setPending(null)
@@ -152,7 +173,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
       )
     } catch (e) {
       toast((e as Error).message)
-    }
+    } finally { mutation.current = false; setBusy(false) }
   }
 
   const groups: { group: string; items: Row[] }[] = [
@@ -171,7 +192,11 @@ export function Settings({ onBack }: { onBack: () => void }) {
           onClick: () => run(exportJSON, 'Резервная копия готова').then(() => getLastBackup().then(setLastBackup)),
         },
         { Icon: Upload, label: 'Восстановить из копии', hint: 'JSON', onClick: () => fileRef.current?.click() },
-        ...(canUndo ? [{ Icon: Undo2, label: 'Вернуть данные до восстановления', onClick: () => run(async () => ((await undoRestore()) ? 'ok' : 'cancelled'), 'Данные возвращены').then(() => setCanUndo(false)) }] : []),
+        ...(canUndo ? [{ Icon: Undo2, label: 'Вернуть данные до восстановления', onClick: () => {
+          if (window.confirm('Вернуть состояние до восстановления? Более поздние изменения будут отменены. Сначала сохраните новую JSON-копию, если они нужны.')) {
+            void run(async () => ((await undoRestore()) ? 'ok' : 'cancelled'), 'Данные возвращены').then((success) => { if (success) setCanUndo(false) })
+          }
+        } }] : []),
         { Icon: FileSpreadsheet, label: 'Экспорт операций', hint: 'CSV', onClick: () => run(exportCSV, 'Файл CSV готов') },
       ],
     },
@@ -253,21 +278,21 @@ export function Settings({ onBack }: { onBack: () => void }) {
       />
 
       {pending && (
-        <Dialog onClose={() => { setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }}>
+        <Dialog onClose={() => { if (busy) return; setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }}>
           <p className="text-[17px] font-semibold">Восстановить копию?</p>
           <p className="mt-1 text-[14px] text-mist">
             Копия от {dayLabel(pending.exportedAt).toLowerCase()}: {pending.operations.filter((o) => !o.deletedAt).length} операций, {pending.clients.filter((c) => !c.deletedAt).length} клиентов.
           </p>
           <div className="mt-5 space-y-2">
-            <button onClick={() => doRestore('merge')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">
+            <button disabled={busy} onClick={() => doRestore('merge')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">
               <p className="text-[16px] font-semibold">Объединить</p>
               <p className="text-[13px] text-mist">Добавить новое, дубликаты пропустить</p>
             </button>
-            {!fromDrive && <button onClick={() => doRestore('replace')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">
+            {!fromDrive && <button disabled={busy} onClick={() => doRestore('replace')} className="press w-full rounded-2xl bg-white/10 p-3.5 text-left">
               <p className="text-[16px] font-semibold text-amber">Заменить всё</p>
               <p className="text-[13px] text-mist">Текущие данные заменятся копией. Это можно отменить в настройках.</p>
             </button>}
-            <button onClick={() => { setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }} className="press h-12 w-full rounded-2xl font-medium text-mist">Отмена</button>
+            <button disabled={busy} onClick={() => { setPending(null); if (fromDrive) finishDriveRestore(); setFromDrive(false) }} className="press h-12 w-full rounded-2xl font-medium text-mist">Отмена</button>
           </div>
         </Dialog>
       )}
@@ -278,7 +303,13 @@ export function Settings({ onBack }: { onBack: () => void }) {
           <p className="mt-1 text-[14px] text-mist">Операции, клиенты, свои категории и история изменений удалятся с устройства без возможности восстановления. Сначала сохраните резервную копию.</p>
           <div className="mt-5 grid grid-cols-2 gap-2">
             <button onClick={() => setWipe(false)} className="press h-12 rounded-2xl bg-white/8 font-medium">Отмена</button>
-            <button onClick={async () => { await actions.wipeAll(); setWipe(false); toast('Все данные удалены') }} className="press h-12 rounded-2xl bg-expense font-semibold text-white">Удалить</button>
+            <button disabled={busy} onClick={async () => {
+              if (mutation.current) return
+              mutation.current = true; setBusy(true)
+              try { await actions.wipeAll(); setWipe(false); toast('Все данные удалены') }
+              catch { toast('Не удалось выполнить удаление. Данные сохранены, попробуйте снова.') }
+              finally { mutation.current = false; setBusy(false) }
+            }} className="press h-12 rounded-2xl bg-expense font-semibold text-white">Удалить</button>
           </div>
         </Dialog>
       )}

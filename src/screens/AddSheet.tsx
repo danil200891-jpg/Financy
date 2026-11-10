@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, ChevronDown, ImageUp, RefreshCw, Sparkles, X, Zap } from 'lucide-react'
-import { actions, findDuplicate, getState, type OperationDraft } from '../lib/store'
+import { actions, findDuplicate, getState, waitForWrites, type OperationDraft } from '../lib/store'
 import { recognize as recognizeImage, warmUp } from '../lib/ocr'
 import { guessKind, parseRecognized } from '../lib/receipt'
 import { normalize, parseText } from '../lib/parse'
 import { fmt } from '../lib/format'
-import { Keyboard, PrimaryButton, ScanLine, Segmented, Sheet } from '../components/ui'
+import { Keyboard, PrimaryButton, ScanLine, Segmented, Sheet, lockBodyScroll } from '../components/ui'
 import { OperationForm, centsToText, emptyForm, toDraft, type FormValue } from '../components/OperationForm'
 
 export type AddMode = 'text' | 'camera' | 'upload'
@@ -43,10 +43,11 @@ function CameraView({ onCapture, onClose }: { onCapture: (dataUrl: string) => vo
   const stream = useRef<MediaStream | null>(null)
 
   useEffect(() => {
+    const unlock = lockBodyScroll()
     let cancelled = false
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('Камера доступна только по HTTPS или в установленном приложении.')
-      return
+      return unlock
     }
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
@@ -60,6 +61,7 @@ function CameraView({ onCapture, onClose }: { onCapture: (dataUrl: string) => vo
       })
       .catch(() => setError('Нет доступа к камере. Разрешите его в настройках Safari для этого сайта.'))
     return () => {
+      unlock()
       cancelled = true
       stream.current?.getTracks().forEach((t) => t.stop())
     }
@@ -82,12 +84,15 @@ function CameraView({ onCapture, onClose }: { onCapture: (dataUrl: string) => vo
     const c = document.createElement('canvas')
     c.width = v.videoWidth
     c.height = v.videoHeight
-    c.getContext('2d')!.drawImage(v, 0, 0)
-    onCapture(c.toDataURL('image/jpeg', 0.85))
+    try {
+      c.getContext('2d')!.drawImage(v, 0, 0)
+      onCapture(c.toDataURL('image/jpeg', 0.85))
+    } catch { setError('Не удалось получить кадр. Закройте камеру и попробуйте снова.') }
+    finally { c.width = c.height = 0 }
   }
 
   return (
-    <div className="anim-fade fixed inset-0 z-[60] bg-black">
+    <div role="dialog" aria-modal="true" aria-label="Камера" className="anim-fade fixed inset-0 z-[60] bg-black">
       <video ref={video} playsInline muted autoPlay className="absolute inset-0 h-full w-full object-cover" />
       {/* receipt frame */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -163,9 +168,20 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
   const [rawText, setRawText] = useState('')
   const [showRaw, setShowRaw] = useState(false)
   const [dupOk, setDupOk] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const saving = useRef(false)
+  const recognition = useRef<AbortController | null>(null)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => { recognition.current?.abort(); clearTimeout(savedTimer.current) }, [])
+  useEffect(() => () => { if (image?.startsWith('blob:')) URL.revokeObjectURL(image) }, [image])
 
   const reset = () => {
     runId.current++
+    recognition.current?.abort()
+    clearTimeout(savedTimer.current)
+    saving.current = false
+    setBusy(false); setSaved(null); setCameraOpen(false)
     setText(''); setForm(emptyForm()); setFlags({}); setImage(null); setStage('idle')
     setOcrError(null); setRawText(''); setShowRaw(false); setDupOk(false)
   }
@@ -175,12 +191,13 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
     reset()
     if (mode !== 'text') warmUp() // load OCR engine while the user aims the camera
     if (mode === 'camera') setCameraOpen(true)
-    if (mode === 'upload') setTimeout(() => fileRef.current?.click(), 350)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
   const onText = (t: string) => {
     setText(t)
+    setDupOk(false)
+    setFlags({})
     if (!t.trim()) return setForm(emptyForm())
     const p = parseText(t, getState().clients)
     const type = p.type ?? 'expense'
@@ -189,13 +206,16 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
   }
 
   const recognize = async (img: string) => {
+    recognition.current?.abort()
+    const controller = new AbortController()
+    recognition.current = controller
     const run = ++runId.current
     setImage(img)
     setProgress(0)
     setOcrError(null)
     setStage('scanning')
     try {
-      const { text, confidence } = await recognizeImage(img, (p) => run === runId.current && setProgress(p))
+      const { text, confidence } = await recognizeImage(img, (p) => run === runId.current && setProgress(p), controller.signal)
       if (run !== runId.current) return
       const { clients, operations } = getState()
       const kind = mode === 'camera' ? 'receipt' : guessKind(text)
@@ -211,12 +231,13 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
         clientId: r.type === 'income' ? r.clientId : null,
         categoryId: r.title ? guessCategory(r.title, r.type, r.clientId) : null,
         date: r.date ?? emptyForm().date,
+        currency: r.currency,
       })
       setFlags(f)
       setRawText(text.trim())
       setStage('review')
     } catch (e) {
-      console.error(e)
+      if (controller.signal.aborted) return
       if (run !== runId.current) return
       setOcrError('Не получилось распознать изображение. Заполните поля вручную или попробуйте другое фото.')
       setForm(emptyForm())
@@ -225,14 +246,21 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
     }
   }
 
-  const save = () => {
+  const save = async () => {
+    if (saving.current) return
     const d = toDraft(form, mode === 'camera' ? 'camera' : mode === 'upload' ? 'upload' : 'manual')
     if (!d) return
     if (findDuplicate(d) && !dupOk) return setDupOk(true)
-    actions.addOperation(d)
-    setImage(null) // the photo is dropped from memory as soon as the operation is saved
-    setSaved(d)
-    setTimeout(() => { setSaved(null); onClose() }, 900)
+    saving.current = true
+    setBusy(true)
+    try {
+      actions.addOperation(d)
+      await waitForWrites()
+      setImage(null)
+      setSaved(d)
+      savedTimer.current = setTimeout(() => { setSaved(null); onClose() }, 900)
+    } catch { saving.current = false }
+    finally { setBusy(false) }
   }
 
   const draftOk = !!toDraft(form, 'manual')
@@ -240,11 +268,15 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
 
   return (
     <>
-      <Sheet open={!!mode && !cameraOpen} onClose={onClose} full>
+      <Sheet open={!!mode && !cameraOpen} onClose={() => { if (!saving.current) onClose() }} full>
         <div className="px-5 pt-2">
           <Segmented
             value={mode ?? 'text'}
-            onChange={onMode}
+            onChange={(value) => {
+              if (saving.current) return
+              if (value === 'upload') fileRef.current?.click()
+              onMode(value)
+            }}
             options={[
               { value: 'text', label: 'Текстом' },
               { value: 'camera', label: 'Камера' },
@@ -258,6 +290,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
                 <Keyboard size={20} className="shrink-0 text-iris" />
                 <input
                   autoFocus
+                  disabled={busy}
                   value={text}
                   onChange={(e) => onText(e.target.value)}
                   placeholder="Mercadona -42 €"
@@ -319,16 +352,20 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
 
           {showForm && (
             <div className="mt-6">
-              <OperationForm value={form} onChange={(v) => { setForm(v); setDupOk(false) }} flags={flags} />
-              <PrimaryButton className="mt-6" disabled={!draftOk} onClick={save}>
+              <fieldset disabled={busy}>
+                <OperationForm value={form} onChange={(v) => { setForm(v); setDupOk(false) }} flags={flags} />
+              </fieldset>
+              <PrimaryButton className="mt-6" disabled={!draftOk || busy || !!saved} onClick={save}>
                 {dupOk ? 'Да, сохранить дубликат' : form.type === 'income' ? 'Сохранить доход' : 'Сохранить расход'}
               </PrimaryButton>
             </div>
           )}
         </div>
+      </Sheet>
 
         <input
           ref={fileRef}
+          id="receipt-image-input"
           type="file"
           accept="image/*"
           className="hidden"
@@ -336,12 +373,9 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
             const f = e.target.files?.[0]
             e.target.value = ''
             if (!f) return
-            const r = new FileReader()
-            r.onload = () => recognize(r.result as string)
-            r.readAsDataURL(f)
+            void recognize(URL.createObjectURL(f))
           }}
         />
-      </Sheet>
 
       {cameraOpen && (
         <CameraView

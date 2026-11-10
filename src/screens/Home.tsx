@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { useFittedText } from '../lib/use-fitted-text'
 import { Settings2, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import type { Nav } from '../App'
 import { useStore } from '../lib/store'
@@ -18,6 +19,7 @@ function greeting(d = new Date()) {
 /** The hero: a wallet-style card with slowly drifting aurora and a gentle tilt under the finger. */
 function BalanceCard({ net, income, expense, spark }: { net: number; income: number; expense: number; spark: number[] }) {
   const ref = useRef<HTMLDivElement>(null)
+  const balance = useFittedText<HTMLParagraphElement>(net)
   const [tilt, setTilt] = useState({ x: 0, y: 0 })
   const m = splitMoney(net)
   const onMove = (e: React.PointerEvent) => {
@@ -47,10 +49,10 @@ function BalanceCard({ net, income, expense, spark }: { net: number; income: num
           <span className="rounded-full bg-white/15 px-2.5 py-1 text-[12px] font-medium backdrop-blur">EUR</span>
         </div>
 
-        <p className="num mt-3 font-display text-[44px] leading-none font-semibold tracking-[-0.035em] text-white">
+        <p ref={balance} className="num mt-3 whitespace-nowrap font-display text-[44px] leading-none font-semibold tracking-[-0.035em] text-white">
           {m.sign}
           {m.int}
-          <span className="text-[26px] text-white/60">,{m.frac} €</span>
+          <span className="text-[0.59em] text-white/60">,{m.frac} €</span>
         </p>
 
         <div className="-mx-1 mt-2 h-16">

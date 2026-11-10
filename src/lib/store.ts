@@ -4,6 +4,7 @@ import { buildDemoOperations, demoCategories, demoClients } from './demo'
 import { normalize } from './parse'
 import * as DB from './db'
 import { toast } from './toast'
+import { toDateInput } from './format'
 
 /**
  * In-memory cache over IndexedDB: reads are synchronous for the UI,
@@ -21,7 +22,7 @@ export interface State {
 }
 
 const live = <T extends { deletedAt?: string | null }>(xs: T[]) => xs.filter((x) => !x.deletedAt)
-const byDate = (a: Operation, b: Operation) => b.date.localeCompare(a.date)
+const byDate = (a: Operation, b: Operation) => Date.parse(b.date) - Date.parse(a.date)
 
 function derive(all: State['all']): State {
   return {
@@ -65,22 +66,54 @@ export const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random
 const nowIso = () => new Date().toISOString()
 
 const STORE: Record<EntityKind, DB.StoreName> = { operation: 'operations', client: 'clients', category: 'categories' }
-const KEY: Record<EntityKind, keyof State['all']> = STORE
 
 function hist(entity: EntityKind, entityId: string, action: HistoryAction, before?: unknown, after?: unknown): HistoryEntry {
   return { id: uid('h'), entity, entityId, action, at: nowIso(), before, after }
 }
 
-/** Replace-or-insert records in memory, then persist them with history. */
-function write<T extends Operation | Client | Category>(entity: EntityKind, records: T[], history: HistoryEntry[]) {
-  const key = KEY[entity]
-  const map = new Map((state.all[key] as T[]).map((r) => [r.id, r]))
-  for (const r of records) map.set(r.id, r)
-  setAll({ ...state.all, [key]: [...map.values()] })
-  DB.commit(records.map((value) => ({ store: STORE[entity], value })), history).catch((e) => {
-    console.error(e)
-    toast('Не удалось сохранить на устройстве. Проверьте свободное место.')
+const pendingWrites = new Set<Promise<void>>()
+type Put = { store: DB.StoreName; value: Operation | Client | Category }
+
+/** Let forms acknowledge success only after their IndexedDB transactions finish. */
+export async function waitForWrites() {
+  while (pendingWrites.size) await Promise.all([...pendingWrites])
+}
+
+function writeBatch(puts: Put[], history: HistoryEntry[]) {
+  const before = state.all
+  const maps = new Map<DB.StoreName, Map<string, Put['value']>>()
+  for (const put of puts) {
+    if (!maps.has(put.store)) maps.set(put.store, new Map(before[put.store].map((value) => [value.id, value])))
+    maps.get(put.store)!.set(put.value.id, put.value)
+  }
+  let next = { ...before }
+  for (const [store, records] of maps) next = { ...next, [store]: [...records.values()] }
+  setAll(next)
+  const saved = DB.commit(puts, history).catch(() => {
+    // Revert this failed write without overwriting a later edit to the same record.
+    let rolledBack = { ...state.all }
+    for (const store of maps.keys()) {
+      const records = new Map<string, Put['value']>(state.all[store].map((value) => [value.id, value]))
+      for (const put of puts.filter((item) => item.store === store)) {
+        if (records.get(put.value.id) !== put.value) continue
+        const previous = before[store].find((value) => value.id === put.value.id)
+        if (previous) records.set(previous.id, previous)
+        else records.delete(put.value.id)
+      }
+      rolledBack = { ...rolledBack, [store]: [...records.values()] }
+    }
+    setAll(rolledBack)
+    const error = new Error('Не удалось сохранить на устройстве. Проверьте свободное место и повторите.')
+    toast(error.message)
+    throw error
   })
+  pendingWrites.add(saved)
+  void saved.then(() => { pendingWrites.delete(saved) }, () => { pendingWrites.delete(saved) })
+}
+
+/** Preserve the synchronous action API and track its durable completion separately. */
+function write<T extends Operation | Client | Category>(entity: EntityKind, records: T[], history: HistoryEntry[]) {
+  writeBatch(records.map((value) => ({ store: STORE[entity], value })), history)
 }
 
 export async function initStore() {
@@ -89,10 +122,10 @@ export async function initStore() {
   const data = await DB.loadAll()
   if (!data.initialized) {
     const t = nowIso()
-    const cats = demoCategories.map((c) => ({ ...c, updatedAt: t }))
+    const cats = demoCategories.filter((category) => !data.categories.some((existing) => existing.id === category.id)).map((c) => ({ ...c, updatedAt: t }))
     await DB.commit(cats.map((value) => ({ store: 'categories' as const, value })))
     await DB.setMeta('initialized', t)
-    data.categories = cats
+    data.categories = [...data.categories, ...cats]
   }
   setAll({ operations: data.operations, clients: data.clients, categories: data.categories })
 }
@@ -100,8 +133,8 @@ export async function initStore() {
 export type OperationDraft = Omit<Operation, 'id' | 'createdAt' | 'updatedAt' | 'deletedAt'>
 
 /** Fingerprint used for duplicate detection: same day, type, amount and title. */
-export const fingerprint = (o: Pick<Operation, 'date' | 'type' | 'amount' | 'title'>) =>
-  `${o.date.slice(0, 10)}|${o.type}|${o.amount}|${normalize(o.title)}`
+export const fingerprint = (o: Pick<Operation, 'date' | 'type' | 'amount' | 'title'> & Partial<Pick<Operation, 'currency'>>) =>
+  `${toDateInput(o.date)}|${o.type}|${o.amount}|${(o.currency ?? 'EUR').toUpperCase()}|${normalize(o.title)}`
 
 export function findDuplicate(d: OperationDraft, ignoreId?: string) {
   const fp = fingerprint(d)
@@ -137,8 +170,8 @@ export const actions = {
   },
   async purgeDeleted() {
     const ids = state.deleted.map((o) => o.id)
-    setAll({ ...state.all, operations: state.all.operations.filter((o) => !o.deletedAt) })
     await DB.hardDelete('operations', ids)
+    setAll({ ...state.all, operations: state.all.operations.filter((o) => !ids.includes(o.id) || !o.deletedAt) })
   },
 
   addClient(name: string, color: string) {
@@ -161,8 +194,10 @@ export const actions = {
     const after = { ...before, deletedAt: t, updatedAt: t }
     const ops = state.all.operations.filter((o) => o.clientId === id)
     const opsAfter = ops.map((o) => ({ ...o, clientId: null, updatedAt: t }))
-    write('client', [after], [hist('client', id, 'delete', before, after)])
-    if (ops.length) write('operation', opsAfter, ops.map((o, i) => hist('operation', o.id, 'update', o, opsAfter[i])))
+    writeBatch([
+      { store: 'clients', value: after },
+      ...opsAfter.map((value) => ({ store: 'operations' as const, value })),
+    ], [hist('client', id, 'delete', before, after), ...ops.map((o, i) => hist('operation', o.id, 'update', o, opsAfter[i]))])
   },
 
   addCategory(c: Omit<Category, 'id'>) {
@@ -177,8 +212,10 @@ export const actions = {
     const after = { ...before, deletedAt: t, updatedAt: t }
     const ops = state.all.operations.filter((o) => o.categoryId === id)
     const opsAfter = ops.map((o) => ({ ...o, categoryId: null, updatedAt: t }))
-    write('category', [after], [hist('category', id, 'delete', before, after)])
-    if (ops.length) write('operation', opsAfter, ops.map((o, i) => hist('operation', o.id, 'update', o, opsAfter[i])))
+    writeBatch([
+      { store: 'categories', value: after },
+      ...opsAfter.map((value) => ({ store: 'operations' as const, value })),
+    ], [hist('category', id, 'delete', before, after), ...ops.map((o, i) => hist('operation', o.id, 'update', o, opsAfter[i]))])
   },
 
   /** Adds demo clients and operations so the app can be explored. */
@@ -194,10 +231,10 @@ export const actions = {
   },
 
   async wipeAll() {
-    await DB.replaceAll({ operations: [], clients: [], categories: [], history: [] })
+    await waitForWrites()
     const t = nowIso()
     const cats = demoCategories.map((c) => ({ ...c, updatedAt: t, deletedAt: null }))
-    await DB.commit(cats.map((value) => ({ store: 'categories' as const, value })))
+    await DB.replaceAll({ operations: [], clients: [], categories: cats, history: [] })
     setAll({ operations: [], clients: [], categories: cats })
   },
 

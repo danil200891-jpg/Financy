@@ -72,6 +72,7 @@ textarea {
 }
 
 .num {
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
 }

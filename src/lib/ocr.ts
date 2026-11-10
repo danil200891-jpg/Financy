@@ -10,9 +10,19 @@ const BASE = import.meta.env.BASE_URL + 'ocr'
 let worker: Promise<Worker> | null = null
 let idle: ReturnType<typeof setTimeout> | undefined
 let onProgress: ((p: number) => void) | null = null
+let generation = 0
+let active: AbortController | undefined
+
+function resetWorker() {
+  const previous = worker
+  worker = null
+  generation++
+  void previous?.then((instance) => instance.terminate()).catch(() => {})
+}
 
 function getWorker() {
-  if (!worker)
+  if (!worker) {
+    const createdGeneration = generation
     worker = import('tesseract.js').then(({ createWorker, OEM }) =>
       createWorker(['spa', 'eng', 'rus'], OEM.LSTM_ONLY, {
         workerPath: `${BASE}/worker.min.js`,
@@ -20,26 +30,26 @@ function getWorker() {
         langPath: `${BASE}/lang`,
         gzip: true,
         logger: (m) => {
+          if (generation !== createdGeneration) return
           if (m.status === 'recognizing text') onProgress?.(0.25 + m.progress * 0.75)
           else if (typeof m.progress === 'number') onProgress?.(m.progress * 0.25)
         },
       }),
     )
+  }
   return worker
 }
 
 /** Free memory after a while of inactivity — iOS kills tabs that hold big WASM heaps. */
 function scheduleRelease() {
   clearTimeout(idle)
-  idle = setTimeout(async () => {
-    const w = worker
-    worker = null
-    ;(await w)?.terminate()
-  }, 90_000)
+  idle = setTimeout(resetWorker, 90_000)
 }
 
 export function warmUp() {
-  getWorker().catch(() => { worker = null })
+  const currentGeneration = generation
+  getWorker().catch(() => { if (generation === currentGeneration) resetWorker() })
+  scheduleRelease()
 }
 
 /** Scale to a size Tesseract likes, convert to grayscale and stretch contrast. */
@@ -55,7 +65,8 @@ export async function preprocess(src: Blob | string): Promise<HTMLCanvasElement>
   }
   const longSide = Math.max(img.naturalWidth, img.naturalHeight)
   let scale = Math.min(1, 2200 / longSide)
-  if (img.naturalWidth < 1000) scale = Math.min(2, 1400 / img.naturalWidth) // small screenshots: upscale
+  if (!img.naturalWidth || !img.naturalHeight) throw new Error('Изображение не содержит пикселей')
+  if (img.naturalWidth < 1000) scale = Math.min(2, 1400 / img.naturalWidth, 2200 / longSide)
   const c = document.createElement('canvas')
   c.width = Math.round(img.naturalWidth * scale)
   c.height = Math.round(img.naturalHeight * scale)
@@ -91,21 +102,43 @@ export interface OcrResult {
   confidence: number
 }
 
-export async function recognize(src: Blob | string, progress?: (p: number) => void): Promise<OcrResult> {
+export async function recognize(src: Blob | string, progress?: (p: number) => void, signal?: AbortSignal): Promise<OcrResult> {
+  active?.abort()
+  const controller = new AbortController()
+  active = controller
   clearTimeout(idle)
   onProgress = progress ?? null
+  let canvas: HTMLCanvasElement | undefined
+  const cancel = () => controller.abort()
+  signal?.addEventListener('abort', cancel, { once: true })
+  if (signal?.aborted) controller.abort()
+  let timeout: ReturnType<typeof setTimeout>
+  const cancelled = new Promise<never>((_, reject) => {
+    const stop = () => { resetWorker(); reject(new Error('Распознавание отменено или превысило время ожидания')) }
+    controller.signal.addEventListener('abort', stop, { once: true })
+    if (controller.signal.aborted) stop()
+    timeout = setTimeout(cancel, 120000)
+  })
   try {
-    const canvas = await preprocess(src)
-    const w = await getWorker()
-    const { data } = await w.recognize(canvas)
-    // release pixels right away
-    canvas.width = canvas.height = 0
-    return { text: data.text, confidence: data.confidence }
+    return await Promise.race([(async () => {
+      canvas = await preprocess(src)
+      if (controller.signal.aborted) { canvas.width = canvas.height = 0; throw new Error('Распознавание отменено') }
+      const w = await getWorker()
+      if (controller.signal.aborted) throw new Error('Распознавание отменено')
+      const { data } = await w.recognize(canvas)
+      return { text: data.text, confidence: data.confidence }
+    })(), cancelled])
   } catch (e) {
-    worker = null
+    if (active === controller) resetWorker()
     throw e
   } finally {
-    onProgress = null
-    scheduleRelease()
+    clearTimeout(timeout!)
+    signal?.removeEventListener('abort', cancel)
+    if (canvas) canvas.width = canvas.height = 0
+    if (active === controller) {
+      active = undefined
+      onProgress = null
+      scheduleRelease()
+    }
   }
 }

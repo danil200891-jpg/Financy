@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { History as HistoryIcon, Trash2 } from 'lucide-react'
-import { actions, findDuplicate, useStore } from '../lib/store'
+import { actions, findDuplicate, useStore, waitForWrites } from '../lib/store'
 import { historyFor } from '../lib/db'
+import { toast } from '../lib/toast'
 import { dayLabel, fmt, timeLabel, toDateInput } from '../lib/format'
 import type { HistoryEntry, Operation } from '../lib/types'
 import { Card, PrimaryButton, Sheet } from '../components/ui'
@@ -30,17 +31,23 @@ export function EditSheet({ id, onClose }: { id: string | null; onClose: () => v
   const [confirm, setConfirm] = useState(false)
   const [dupOk, setDupOk] = useState(false)
   const [log, setLog] = useState<HistoryEntry[]>([])
+  const saving = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const original = useRef('')
 
   useEffect(() => {
     setConfirm(false)
     setDupOk(false)
     setLog([])
     if (!op) return
+    original.current = JSON.stringify(op)
     setForm({
       type: op.type, amountText: centsToText(op.amount), title: op.title, categoryId: op.categoryId,
-      clientId: op.clientId, date: toDateInput(op.date), note: op.note ?? '',
+      clientId: op.clientId, date: toDateInput(op.date), note: op.note ?? '', currency: op.currency,
     })
-    historyFor(op.id).then(setLog).catch(() => {})
+    let cancelled = false
+    historyFor(op.id).then((entries) => { if (!cancelled) setLog(entries) }).catch(() => {})
+    return () => { cancelled = true }
     // only when another operation is opened
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
@@ -49,24 +56,37 @@ export function EditSheet({ id, onClose }: { id: string | null; onClose: () => v
   const draft = toDraft(form, op.source, op.date)
   const dup = draft ? findDuplicate(draft, op.id) : undefined
 
-  const save = () => {
-    if (!draft) return
+  const save = async () => {
+    if (!draft || saving.current) return
+    if (JSON.stringify(op) !== original.current) { toast('Операция изменилась в другой вкладке. Закройте и откройте её заново перед сохранением.'); return }
     if (dup && !dupOk) return setDupOk(true)
-    actions.updateOperation(op.id, draft)
-    onClose()
+    saving.current = true
+    setBusy(true)
+    try {
+      actions.updateOperation(op.id, draft)
+      await waitForWrites()
+      onClose()
+    } catch { /* The store reports the error and keeps the draft open. */ }
+    finally { saving.current = false; setBusy(false) }
   }
 
   return (
-    <Sheet open={!!id} onClose={onClose} title="Операция" full>
+    <Sheet open={!!id} onClose={() => { if (!saving.current) onClose() }} title="Операция" full>
       <div className="px-5 pt-4">
         <OperationForm value={form} onChange={(v) => { setForm(v); setDupOk(false) }} ignoreId={op.id} />
-        <PrimaryButton className="mt-6" disabled={!draft} onClick={save}>
+        <PrimaryButton className="mt-6" disabled={!draft || busy} onClick={save}>
           {dup && dupOk ? 'Да, сохранить с дубликатом' : 'Сохранить изменения'}
         </PrimaryButton>
         {confirm ? (
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button onClick={() => setConfirm(false)} className="press h-14 rounded-[18px] bg-white/8 font-medium">Отмена</button>
-            <button onClick={() => { actions.removeOperation(op.id); onClose() }} className="press h-14 rounded-[18px] bg-expense font-semibold text-white">Удалить</button>
+            <button disabled={busy} onClick={async () => {
+              if (saving.current) return
+              saving.current = true; setBusy(true)
+              try { actions.removeOperation(op.id); await waitForWrites(); onClose() }
+              catch { /* Keep the restored operation available on failure. */ }
+              finally { saving.current = false; setBusy(false) }
+            }} className="press h-14 rounded-[18px] bg-expense font-semibold text-white">Удалить</button>
           </div>
         ) : (
           <button onClick={() => setConfirm(true)} className="press mt-3 flex h-14 w-full items-center justify-center gap-2 rounded-[18px] text-[16px] font-medium text-expense">

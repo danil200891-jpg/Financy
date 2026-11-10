@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Nav } from '../App'
-import { actions, useStore } from '../lib/store'
+import { actions, useStore, waitForWrites } from '../lib/store'
 import { byPeriod, monthly, totals } from '../lib/stats'
 import { fmt, fmtShort, monthShort } from '../lib/format'
 import { Avatar, Card, ChevronLeft, IconButton, OpRow } from '../components/ui'
@@ -14,6 +14,8 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
   const own = useMemo(() => ops.filter((o) => o.clientId === id), [ops, id])
   const months = useMemo(() => monthly(own, 12), [own])
   const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [limit, setLimit] = useState(100)
   if (!c) return null
 
   const stat = [
@@ -38,7 +40,7 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
 
         <div className="mt-4 flex flex-col items-center">
           <Avatar client={c} size={88} />
-          <h1 className="mt-4 font-display text-[26px] font-semibold tracking-[-0.02em]">{c.name}</h1>
+          <h1 className="mt-4 max-w-full break-words px-4 text-center font-display text-[26px] font-semibold tracking-[-0.02em]">{c.name}</h1>
           <p className="text-[14px] text-mist">{own.length} операций</p>
         </div>
 
@@ -68,10 +70,11 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
 
         <h2 className="mt-6 mb-3 px-5 text-[20px] font-semibold">Операции</h2>
         <Card className="mx-4 divide-y divide-line overflow-hidden">
-          {own.map((o) => (
+          {own.slice(0, limit).map((o) => (
             <OpRow key={o.id} op={o} showDate cat={cats.find((x) => x.id === o.categoryId)} onClick={() => nav.openEdit(o.id)} />
           ))}
         </Card>
+        {own.length > limit && <button onClick={() => setLimit((value) => value + 100)} className="glass press mx-4 mt-3 h-12 rounded-2xl px-5 text-[15px] text-iris">Показать ещё</button>}
       </div>
 
       {confirm && (
@@ -81,7 +84,13 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
             <p className="mt-1 text-[14px] text-mist">Операции останутся в истории как разовые, итого {fmt(totals(own).income)}.</p>
             <div className="mt-5 grid grid-cols-2 gap-2">
               <button onClick={() => setConfirm(false)} className="press h-12 rounded-2xl bg-white/8 font-medium">Отмена</button>
-              <button onClick={() => { actions.removeClient(c.id); onBack() }} className="press h-12 rounded-2xl bg-expense/90 font-semibold text-white">Удалить</button>
+              <button disabled={busy} onClick={async () => {
+                if (busy) return
+                setBusy(true)
+                try { actions.removeClient(c.id); await waitForWrites(); onBack() }
+                catch { /* The store restores the client and reports the error. */ }
+                finally { setBusy(false) }
+              }} className="press h-12 rounded-2xl bg-expense/90 font-semibold text-white">Удалить</button>
             </div>
           </div>
         </div>

@@ -2,8 +2,13 @@ import type { Operation, Period } from './types'
 
 const money = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 })
 const moneyShort = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
+export const isEuro = (operation: Pick<Operation, 'currency'>) => !operation.currency || operation.currency.toUpperCase() === 'EUR'
 
-export const fmt = (cents: number) => money.format(cents / 100)
+export const fmt = (cents: number, currency = 'EUR') => {
+  if (currency === 'EUR') return money.format(cents / 100)
+  try { return new Intl.NumberFormat('ru-RU', { style: 'currency', currency }).format(cents / 100) }
+  catch { return `${(cents / 100).toFixed(2)} ${currency}` }
+}
 export const fmtShort = (cents: number) => moneyShort.format(Math.round(cents / 100))
 
 /** Splits "1 234,50 €" into integer and fraction parts for hero display. */

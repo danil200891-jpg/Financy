@@ -2,9 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
-import { initStore } from './lib/store'
+import { actions, initStore, waitForWrites } from './lib/store'
 import { toast } from './lib/toast'
 import { initDriveBackup } from './lib/drive-backup'
+import { AppErrorBoundary } from './components/AppErrorBoundary'
 
 type Boot = { stage: (s: string) => void; done: () => void; fail: (title: string, err: unknown) => void }
 const boot = (window as unknown as { __boot?: Boot }).__boot
@@ -18,7 +19,11 @@ if ('serviceWorker' in navigator) {
       const update = registerSW({
         immediate: true,
         // new version downloaded in the background → ask; data in IndexedDB is not affected
-        onNeedRefresh: () => toast('Доступна новая версия', { label: 'Обновить', run: () => update(true) }, 0),
+        onNeedRefresh: () => toast('Доступна новая версия', { label: 'Обновить', run: async () => {
+          if (document.querySelector('[role="dialog"]') && !window.confirm('Открыта форма. Обновление закроет её без сохранения незавершённого ввода. Обновить сейчас?')) return false
+          await waitForWrites()
+          await update(true)
+        } }, 0),
         onOfflineReady: () => toast('Готово к работе без интернета'),
         onRegisteredSW: (_url, reg) => {
           if (!reg) return
@@ -47,11 +52,19 @@ Promise.race([
   new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Хранилище не ответило за 12 секунд')), 12000)),
 ])
   .then(() => {
+    let calendarDay = new Date().toDateString()
+    const refreshData = () => {
+      if (document.visibilityState !== 'visible') return
+      calendarDay = new Date().toDateString()
+      void waitForWrites().then(() => actions.reload()).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', refreshData)
+    setInterval(() => { if (calendarDay !== new Date().toDateString()) refreshData() }, 60000)
     void initDriveBackup().catch(() => {})
     boot?.stage('rendering')
     root.render(
       <StrictMode>
-        <App />
+        <AppErrorBoundary><App /></AppErrorBoundary>
       </StrictMode>,
     )
     boot?.done()

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import type { Nav } from '../App'
 import { useStore } from '../lib/store'
-import { dayLabel, fmt } from '../lib/format'
+import { dayLabel, fmt, toDateInput } from '../lib/format'
 import { normalize } from '../lib/parse'
 import { Card, Empty, OpRow, ScreenHeader, Segmented } from '../components/ui'
 import type { OpType } from '../lib/types'
@@ -14,29 +14,34 @@ export function History({ nav }: { nav: Nav }) {
   const [q, setQ] = useState('')
   const [type, setType] = useState<'all' | OpType>('all')
   const [cat, setCat] = useState<string | null>(null)
+  const [limit, setLimit] = useState(100)
+  const clientById = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients])
+  const catById = useMemo(() => new Map(cats.map((category) => [category.id, category])), [cats])
 
   const filtered = useMemo(() => {
     const n = normalize(q)
     return ops.filter((o) => {
       if (type !== 'all' && o.type !== type) return false
-      if (cat && o.categoryId !== cat) return false
+      if (cat && catById.has(cat) && o.categoryId !== cat) return false
       if (!n) return true
-      const client = clients.find((c) => c.id === o.clientId)?.name ?? ''
+      const client = clientById.get(o.clientId ?? '')?.name ?? ''
       return normalize(`${o.title} ${client} ${o.note ?? ''}`).includes(n)
     })
-  }, [ops, q, type, cat, clients])
+  }, [ops, q, type, cat, clientById, catById])
 
   const groups = useMemo(() => {
-    const g: { day: string; items: typeof filtered; net: number }[] = []
+    const g: { day: string; items: typeof filtered; net: Map<string, number> }[] = []
+    let index = 0
     for (const o of filtered) {
-      const day = o.date.slice(0, 10)
+      const day = toDateInput(o.date)
       let last = g[g.length - 1]
-      if (!last || last.day !== day) g.push((last = { day, items: [], net: 0 }))
-      last.items.push(o)
-      last.net += o.type === 'income' ? o.amount : -o.amount
+      if (!last || last.day !== day) g.push((last = { day, items: [], net: new Map() }))
+      if (index++ < limit) last.items.push(o)
+      const currency = (o.currency ?? 'EUR').toUpperCase()
+      last.net.set(currency, (last.net.get(currency) ?? 0) + (o.type === 'income' ? o.amount : -o.amount))
     }
-    return g.slice(0, 60)
-  }, [filtered])
+    return g.filter((group) => group.items.length)
+  }, [filtered, limit])
 
   return (
     <>
@@ -45,7 +50,7 @@ export function History({ nav }: { nav: Nav }) {
       <div className="sticky top-[env(safe-area-inset-top)] z-20 space-y-3 bg-abyss/75 px-4 pt-2 pb-3 backdrop-blur-xl">
         <label className="glass flex h-12 items-center gap-2.5 rounded-2xl px-4">
           <Search size={18} className="text-mist" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию или клиенту" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fog" />
+          <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(100) }} placeholder="Поиск по названию или клиенту" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fog" />
           {q && (
             <button aria-label="Очистить" onClick={() => setQ('')}>
               <X size={18} className="text-mist" />
@@ -54,7 +59,7 @@ export function History({ nav }: { nav: Nav }) {
         </label>
         <Segmented
           value={type}
-          onChange={setType}
+          onChange={(value) => { setType(value); setCat(null); setLimit(100) }}
           options={[{ value: 'all', label: 'Все' }, { value: 'income', label: 'Доходы' }, { value: 'expense', label: 'Расходы' }]}
         />
         <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
@@ -63,7 +68,7 @@ export function History({ nav }: { nav: Nav }) {
             .map((c) => (
               <button
                 key={c.id}
-                onClick={() => setCat(cat === c.id ? null : c.id)}
+                onClick={() => { setCat(cat === c.id ? null : c.id); setLimit(100) }}
                 className={`press shrink-0 rounded-full px-3.5 py-1.5 text-[14px] font-medium transition-colors ${cat === c.id ? 'text-abyss' : 'glass text-mist'}`}
                 style={cat === c.id ? { background: c.color } : undefined}
               >
@@ -79,9 +84,10 @@ export function History({ nav }: { nav: Nav }) {
           <section key={g.day}>
             <div className="mb-2 flex justify-between px-1 text-[14px]">
               <span className="font-medium text-mist">{dayLabel(g.items[0].date)}</span>
-              <span className={`num ${g.net >= 0 ? 'text-income' : 'text-mist'}`}>
-                {g.net >= 0 ? '+' : '−'}
-                {fmt(Math.abs(g.net))}
+              <span className="num flex flex-wrap justify-end gap-x-2">
+                {[...g.net].map(([currency, net]) => <span key={currency} className={net >= 0 ? 'text-income' : 'text-mist'}>
+                  {net >= 0 ? '+' : '−'}{fmt(Math.abs(net), currency)}
+                </span>)}
               </span>
             </div>
             <Card className="divide-y divide-line overflow-hidden">
@@ -89,14 +95,15 @@ export function History({ nav }: { nav: Nav }) {
                 <OpRow
                   key={o.id}
                   op={o}
-                  cat={cats.find((c) => c.id === o.categoryId)}
-                  client={clients.find((c) => c.id === o.clientId)}
+                  cat={catById.get(o.categoryId ?? '')}
+                  client={clientById.get(o.clientId ?? '')}
                   onClick={() => nav.openEdit(o.id)}
                 />
               ))}
             </Card>
           </section>
         ))}
+        {filtered.length > limit && <button onClick={() => setLimit((value) => value + 100)} className="glass press h-12 w-full rounded-2xl text-[15px] text-iris">Показать ещё</button>}
       </div>
     </>
   )

@@ -5,6 +5,7 @@ export type Kind = 'receipt' | 'screenshot'
 export type FieldFlag = 'type' | 'amount' | 'title' | 'date'
 
 export interface Recognized {
+  currency?: string
   type: OpType
   amount: number | null // cents
   title: string
@@ -43,6 +44,8 @@ const MONEY_INT = /([+\-−–]\s?)?(?:€\s?(\d+)|(\d+)\s?(?:€|eur\b|euros?\b
 interface Money { cents: number; sign: '+' | '-' | ''; line: number; hasCurrency: boolean }
 
 function moneyIn(line: string, idx: number): Money[] {
+  // Dates must never become fallback amounts (e.g. 10.11.2026 -> 10.11 EUR).
+  line = line.replace(/\b(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-](?:\d{4}|\d{2}))\b/g, (value) => ' '.repeat(value.length))
   const out: Money[] = []
   for (const m of line.matchAll(MONEY)) {
     const int = parseInt(m[2].replace(/[.\s ]/g, ''), 10)
@@ -54,6 +57,10 @@ function moneyIn(line: string, idx: number): Money[] {
       const v = parseInt(m[2] ?? m[3], 10)
       out.push({ cents: v * 100, sign: m[1] ? (m[1].trim() === '+' ? '+' : '-') : '', line: idx, hasCurrency: true })
     }
+  if (!out.length) {
+    const total = line.match(/(?:^|\s)(?:total(?: a pagar)?|importe total|a pagar|итого(?: к оплате)?|к оплате|всего)\s*:?\s*(\d+)\s*(?:€|eur|₽|руб)?\s*$/i)
+    if (total) out.push({ cents: Number(total[1]) * 100, sign: '', line: idx, hasCurrency: /€|eur|₽|руб/i.test(total[0]) })
+  }
   return out.filter((x) => x.cents > 0 && x.cents < 10_000_000_00)
 }
 
@@ -197,5 +204,8 @@ export function parseRecognized(text: string, kind: Kind, clients: Client[], kno
   const date = findDate(text, now)
   if (!date) flags.date = 'Дату не нашли — стоит сегодняшняя'
 
-  return { type, amount: amount?.cents ?? null, title, clientId, date, flags }
+  const currency = /₽|(?:^|[^а-яё])руб(?:лей|ля|ль|\.)?(?=$|[^а-яё])/i.test(text) ? 'RUB' : /\bUSD\b/i.test(text) ? 'USD' : /£|\bGBP\b/i.test(text) ? 'GBP' : 'EUR'
+  const ambiguousDollar = /\$/.test(text) && !/\bUSD\b/i.test(text)
+  if (ambiguousDollar) flags.amount = 'Знак $ не определяет валюту. Введите сумму в EUR вручную.'
+  return { type, amount: ambiguousDollar ? null : amount?.cents ?? null, title, clientId, date, flags, currency }
 }

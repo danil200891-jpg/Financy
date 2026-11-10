@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ChevronRight, UserPlus } from 'lucide-react'
 import type { Nav } from '../App'
-import { actions, useStore } from '../lib/store'
+import { actions, useStore, waitForWrites } from '../lib/store'
 import { byPeriod, totals } from '../lib/stats'
-import { fmt, fmtShort, periodLabel, plural } from '../lib/format'
+import { fmt, fmtShort, periodLabel, plural, isEuro } from '../lib/format'
 import type { Period } from '../lib/types'
 import { Avatar, Card, Empty, IconButton, PrimaryButton, ScreenHeader, Segmented, Sheet } from '../components/ui'
 
@@ -12,11 +12,20 @@ export const CLIENT_COLORS = ['#7c8cff', '#3fe0c5', '#ffc56b', '#ff6b81', '#9f6b
 export function NewClientSheet({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated?: (id: string) => void }) {
   const [name, setName] = useState('')
   const [color, setColor] = useState(CLIENT_COLORS[0])
-  const save = () => {
-    const c = actions.addClient(name, color)
-    setName('')
-    onCreated?.(c.id)
-    onClose()
+  const saving = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    if (saving.current || !name.trim()) return
+    saving.current = true
+    setBusy(true)
+    try {
+      const c = actions.addClient(name, color)
+      await waitForWrites()
+      setName('')
+      onCreated?.(c.id)
+      onClose()
+    } catch { /* Keep the draft on a failed write. */ }
+    finally { saving.current = false; setBusy(false) }
   }
   return (
     <Sheet open={open} onClose={onClose} title="Новый клиент">
@@ -31,18 +40,18 @@ export function NewClientSheet({ open, onClose, onCreated }: { open: boolean; on
           placeholder="Название или имя"
           className="glass h-14 w-full rounded-2xl px-4 outline-none placeholder:text-fog"
         />
-        <div className="flex justify-between">
+        <div className="no-scrollbar flex gap-2 overflow-x-auto py-1">
           {CLIENT_COLORS.map((c) => (
             <button
               key={c}
               aria-label={`Цвет ${c}`}
               onClick={() => setColor(c)}
-              className="h-9 w-9 rounded-full transition-transform"
+              className="h-11 w-11 shrink-0 rounded-full transition-transform"
               style={{ background: c, transform: c === color ? 'scale(1.15)' : undefined, boxShadow: c === color ? `0 0 0 3px #06070d, 0 0 0 5px ${c}` : undefined }}
             />
           ))}
         </div>
-        <PrimaryButton disabled={!name.trim()} onClick={save}>
+        <PrimaryButton disabled={!name.trim() || busy} onClick={save}>
           Сохранить клиента
         </PrimaryButton>
       </div>
@@ -57,16 +66,26 @@ export function Clients({ nav }: { nav: Nav }) {
   const [adding, setAdding] = useState(false)
 
   const rows = useMemo(() => {
-    const inP = byPeriod(ops, period).filter((o) => o.type === 'income')
+    const inP = byPeriod(ops, period).filter((o) => o.type === 'income' && isEuro(o))
+    const sums = new Map<string, { sum: number; count: number }>()
+    for (const operation of inP) {
+      if (!operation.clientId) continue
+      const own = sums.get(operation.clientId) ?? { sum: 0, count: 0 }
+      own.sum += operation.amount
+      own.count++
+      sums.set(operation.clientId, own)
+    }
     return clients
       .map((c) => {
-        const own = inP.filter((o) => o.clientId === c.id)
-        return { c, sum: totals(own).income, count: own.length }
+        return { c, ...sums.get(c.id) ?? { sum: 0, count: 0 } }
       })
       .sort((a, b) => b.sum - a.sum)
   }, [ops, clients, period])
 
-  const oneOff = useMemo(() => totals(byPeriod(ops, period).filter((o) => o.type === 'income' && !o.clientId)).income, [ops, period])
+  const oneOff = useMemo(() => {
+    const ids = new Set(clients.map((client) => client.id))
+    return totals(byPeriod(ops, period).filter((o) => o.type === 'income' && (!o.clientId || !ids.has(o.clientId)))).income
+  }, [ops, period, clients])
   const total = rows.reduce((s, r) => s + r.sum, 0) + oneOff
   const max = Math.max(1, ...rows.map((r) => r.sum))
 

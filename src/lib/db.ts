@@ -42,7 +42,9 @@ async function idbReady() {
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, msg: string) {
-  return Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))])
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(msg)), ms) })
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer))
 }
 
 export function db() {
@@ -85,12 +87,14 @@ function open() {
 
 export async function loadAll() {
   const d = await db()
+  const tx = d.transaction(['operations', 'clients', 'categories', 'meta'])
   const [operations, clients, categories, initialized] = await Promise.all([
-    d.getAll('operations'),
-    d.getAll('clients'),
-    d.getAll('categories'),
-    d.get('meta', 'initialized'),
+    tx.objectStore('operations').getAll(),
+    tx.objectStore('clients').getAll(),
+    tx.objectStore('categories').getAll(),
+    tx.objectStore('meta').get('initialized'),
   ])
+  await tx.done
   return { operations, clients, categories, initialized: !!initialized }
 }
 
@@ -154,10 +158,17 @@ export async function replaceAll(data: {
   clients: Client[]
   categories: Category[]
   history: HistoryEntry[]
-}) {
+}, snapshot?: { app: string; version: number; exportedAt: string }) {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'history'], 'readwrite')
+  const tx = d.transaction(['operations', 'clients', 'categories', 'history', 'meta'], 'readwrite')
   try {
+    if (snapshot) {
+      const [operations, clients, categories, history] = await Promise.all([
+        tx.objectStore('operations').getAll(), tx.objectStore('clients').getAll(),
+        tx.objectStore('categories').getAll(), tx.objectStore('history').getAll(),
+      ])
+      await tx.objectStore('meta').put({ ...snapshot, operations, clients, categories, history }, 'preRestore')
+    }
     await Promise.all(['operations', 'clients', 'categories', 'history'].map((s) => tx.objectStore(s as 'history').clear()))
     for (const o of data.operations) await tx.objectStore('operations').put(o)
     for (const c of data.clients) await tx.objectStore('clients').put(c)

@@ -14,6 +14,18 @@ export const ICONS: Record<string, typeof Tag> = {
 }
 export { ChevronLeft, ScanLine, ImageUp, Keyboard }
 
+let scrollLocks = 0
+let previousOverflow = ''
+export function lockBodyScroll() {
+  if (scrollLocks++ === 0) { previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden' }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--scrollLocks === 0) document.body.style.overflow = previousOverflow
+  }
+}
+
 export function CategoryIcon({ cat, size = 44 }: { cat?: Category | null; size?: number }) {
   const I = ICONS[cat?.icon ?? 'tag'] ?? Tag
   const color = cat?.color ?? '#8b90a6'
@@ -107,7 +119,7 @@ export function OpRow({ op, cat, client, onClick, showDate }: {
       </div>
       <p className={`num shrink-0 text-[16px] font-semibold ${income ? 'text-income' : 'text-ink'}`}>
         {income ? '+' : '−'}
-        {fmt(op.amount)}
+        {fmt(op.amount, op.currency)}
       </p>
     </button>
   )
@@ -122,16 +134,33 @@ export function Sheet({ open, onClose, children, title, full }: {
   open: boolean; onClose: () => void; children: ReactNode; title?: string; full?: boolean
 }) {
   const [dy, setDy] = useState(0)
+  const [keyboardInset, setKeyboardInset] = useState(0)
   const start = useRef<number | null>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    if (!open) return
+    const unlock = lockBodyScroll()
+    const viewport = window.visualViewport
+    const resize = () => setKeyboardInset(viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0)
+    resize()
+    viewport?.addEventListener('resize', resize)
+    const keyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close.current() }
+    document.addEventListener('keydown', keyDown)
+    return () => { unlock(); document.removeEventListener('keydown', keyDown); viewport?.removeEventListener('resize', resize) }
+  }, [open])
   useEffect(() => {
     if (!open) setDy(0)
   }, [open])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-50" style={{ bottom: keyboardInset }}>
       <div className="anim-fade absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={onClose} />
       <div
-        className={`glass-strong anim-sheet absolute inset-x-0 bottom-0 flex flex-col rounded-t-[32px] ${full ? 'top-[max(env(safe-area-inset-top),16px)]' : 'max-h-[92%]'}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title ?? 'Добавление операции'}
+        className={`glass-strong anim-sheet absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-[520px] flex-col rounded-t-[32px] ${full ? 'top-[max(env(safe-area-inset-top),16px)]' : 'max-h-[92%]'}`}
         style={{ transform: dy ? `translateY(${dy}px)` : undefined, transition: start.current === null ? 'transform 300ms var(--ease-spring)' : 'none' }}
       >
         <div
@@ -139,6 +168,7 @@ export function Sheet({ open, onClose, children, title, full }: {
           onPointerDown={(e) => { start.current = e.clientY; (e.target as HTMLElement).setPointerCapture(e.pointerId) }}
           onPointerMove={(e) => { if (start.current !== null) setDy(Math.max(0, e.clientY - start.current)) }}
           onPointerUp={() => { const d = dy; start.current = null; if (d > 110) onClose(); else setDy(0) }}
+          onPointerCancel={() => { start.current = null; setDy(0) }}
         >
           <div className="h-1.5 w-10 rounded-full bg-white/20" />
           {title && <h2 className="mt-3 text-[17px] font-semibold">{title}</h2>}

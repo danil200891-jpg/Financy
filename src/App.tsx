@@ -26,7 +26,11 @@ export default function App() {
   const [settings, setSettings] = useState(false)
 
   const nav: Nav = {
-    openAdd: (m = 'text') => setAdd(m),
+    openAdd: (m = 'text') => {
+      setAdd(m)
+      // Keep the native file picker in the original user gesture on iOS.
+      if (m === 'upload') (document.getElementById('receipt-image-input') as HTMLInputElement | null)?.click()
+    },
     openEdit: setEditId,
     openClient: setClientId,
     openSettings: () => setSettings(true),
@@ -63,7 +67,10 @@ function Toaster() {
     <div key={t.id} role="status" className="anim-fade glass-strong fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+100px)] z-[80] mx-auto flex max-w-[480px] items-center gap-3 rounded-2xl py-2 pr-2 pl-4 shadow-[0_20px_40px_-15px_rgba(0,0,0,0.8)]">
       <p className="flex-1 py-1.5 text-[15px]">{t.text}</p>
       {t.action && (
-        <button onClick={() => { t.action!.run(); dismissToast() }} className="press rounded-xl bg-white/10 px-3.5 py-2 text-[15px] font-semibold text-iris">
+        <button onClick={async () => {
+          try { if (await t.action!.run() !== false) dismissToast(t.id) }
+          catch { /* A failed action leaves its prompt available for retry. */ }
+        }} className="press rounded-xl bg-white/10 px-3.5 py-2 text-[15px] font-semibold text-iris">
           {t.action.label}
         </button>
       )}

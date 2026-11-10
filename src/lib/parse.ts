@@ -11,10 +11,10 @@ export interface ParsedText {
 
 const INCOME_WORDS = ['доход', 'приход', 'получил', 'получила', 'оплата от', 'income', 'зарплата']
 const EXPENSE_WORDS = ['расход', 'трата', 'потратил', 'потратила', 'купил', 'купила', 'expense', 'оплата']
-const CURRENCY = /(€|eur|евро|euro)/gi
+const CURRENCY = /€|(^|[^a-zа-яё])(eur|евро|euro)(?=$|[^a-zа-яё])/gi
 
 // number: optional sign, digits with optional space/nbsp thousand separators, optional ,/. decimals
-const AMOUNT_RE = /([+\-−–]?)\s*(\d{1,3}(?:[   ]\d{3})+|\d+)(?:[.,](\d{1,2}))?(?!\d)/g
+const AMOUNT_RE = /([+\-−–]?)\s*(\d{1,3}(?:[ .,  ]\d{3})+|\d+)(?:[.,](\d{1,2}))?(?![\d.,])/g
 
 export function normalize(s: string) {
   return s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim()
@@ -26,7 +26,7 @@ export function matchClient(text: string, clients: Client[]): Client | null {
   let best: Client | null = null
   let bestLen = 0
   for (const c of clients) {
-    for (const name of [c.name, ...c.aliases]) {
+    for (const name of [c.name, ...(c.aliases ?? [])]) {
       const n = normalize(name)
       if (!n) continue
       const hit = t === n || t.startsWith(n + ' ') || t.endsWith(' ' + n) || t.includes(' ' + n + ' ')
@@ -44,23 +44,25 @@ export function parseText(input: string, clients: Client[]): ParsedText {
   let type: OpType | null = null
 
   const lower = normalize(input)
-  for (const w of INCOME_WORDS) if (lower.includes(w)) type = 'income'
-  if (!type) for (const w of EXPENSE_WORDS) if (lower.includes(w)) type = 'expense'
+  const containsWord = (word: string) => new RegExp(`(^|[^a-zа-яё])${word}(?=$|[^a-zа-яё])`, 'i').test(lower)
+  for (const w of INCOME_WORDS) if (containsWord(w)) type = 'income'
+  if (!type) for (const w of EXPENSE_WORDS) if (containsWord(w)) type = 'expense'
 
   // take the last number in the string as the amount (titles may contain digits, e.g. "iPhone 15 1200")
-  const matches = [...text.matchAll(AMOUNT_RE)]
+  const matches = [...text.matchAll(AMOUNT_RE)].filter((match) => !/[\d.,]/.test(text[(match.index ?? 0) - 1] ?? ''))
   let amount: number | null = null
   if (matches.length) {
     const m = matches[matches.length - 1]
-    const intPart = m[2].replace(/[   ]/g, '')
+    const intPart = m[2].replace(/[ .,  ]/g, '')
     const frac = (m[3] ?? '').padEnd(2, '0')
-    amount = parseInt(intPart, 10) * 100 + (frac ? parseInt(frac, 10) : 0)
+    const cents = parseInt(intPart, 10) * 100 + (frac ? parseInt(frac, 10) : 0)
+    amount = Number.isSafeInteger(cents) && cents > 0 ? cents : null
     if (m[1] === '+') type = 'income'
     else if (m[1] && '-−–'.includes(m[1])) type = 'expense'
     text = text.slice(0, m.index) + ' ' + text.slice((m.index ?? 0) + m[0].length)
   }
 
-  let title = text.replace(CURRENCY, ' ')
+  let title = text.replace(CURRENCY, (_match, boundary: string | undefined) => boundary ?? ' ')
   for (const w of [...INCOME_WORDS, ...EXPENSE_WORDS]) title = title.replace(new RegExp(`(^|\\s)${w}(?=\\s|$)`, 'gi'), ' ')
   title = title.replace(/[+\-−–]\s*$/g, '').replace(/\s+/g, ' ').trim()
 

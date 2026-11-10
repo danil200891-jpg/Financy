@@ -54,10 +54,14 @@
           document.body.appendChild(box);
           document.getElementById('b-reload').onclick = function () { location.reload(); };
           document.getElementById('b-reset').onclick = function () {
+            if (!window.confirm('Сбросить офлайн-кэш Financy? Для повторной загрузки понадобится интернет. Финансовые данные останутся на устройстве.')) return;
             var jobs = [];
+            var own = document.createElement('a');
+            own.href = '%BASE_URL%';
+            var scope = own.href;
             if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations)
-              jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
-            if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+              jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.filter(function (r) { return r.scope === scope; }).map(function (r) { return r.unregister(); })); }));
+            if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k.indexOf('workbox-') === 0 && k.slice(-scope.length) === scope; }).map(function (k) { return caches.delete(k); })); }));
             Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
           };
         }

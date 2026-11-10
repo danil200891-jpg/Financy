@@ -14,22 +14,29 @@ export interface FormValue {
   clientId: string | null
   date: string // yyyy-mm-dd
   note: string
+  currency?: string
 }
 
 export const centsToText = (c: number | null) => (c == null ? '' : (c / 100).toFixed(2).replace('.', ',').replace(/,00$/, ''))
 export const textToCents = (t: string) => {
-  const n = parseFloat(t.replace(/\s/g, '').replace(',', '.'))
-  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null
+  const clean = t.replace(/\s/g, '').replace(',', '.')
+  if (!/^\d+(?:\.\d{1,2})?$/.test(clean)) return null
+  const cents = Math.round(Number(clean) * 100)
+  return Number.isSafeInteger(cents) && cents > 0 ? cents : null
 }
 
 export function toDraft(v: FormValue, source: OperationDraft['source'], keepTime?: string): OperationDraft | null {
   const amount = textToCents(v.amountText)
   if (!amount || !v.title.trim()) return null
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) return null
   const time = keepTime ? new Date(keepTime) : new Date()
   const [y, m, d] = v.date.split('-').map(Number)
-  const date = new Date(y, m - 1, d, time.getHours(), time.getMinutes()).toISOString()
+  if (!Number.isFinite(time.getTime()) || y < 1 || m < 1 || m > 12 || d < 1 || d > 31) return null
+  time.setFullYear(y, m - 1, d)
+  if (time.getFullYear() !== y || time.getMonth() !== m - 1 || time.getDate() !== d) return null
+  const date = time.toISOString()
   return {
-    type: v.type, amount, currency: 'EUR', title: v.title.trim(), categoryId: v.categoryId,
+    type: v.type, amount, currency: v.currency ?? 'EUR', title: v.title.trim(), categoryId: v.categoryId,
     clientId: v.type === 'income' ? v.clientId : null, date, note: v.note.trim() || undefined, source,
   }
 }
@@ -47,13 +54,14 @@ export function OperationForm({ value, onChange, ignoreId, flags }: {
 }) {
   const cats = useStore((s) => s.categories)
   const clients = useStore((s) => s.clients)
+  const operations = useStore((s) => s.operations)
   const set = (p: Partial<FormValue>) => onChange({ ...value, ...p })
   const income = value.type === 'income'
 
   const dup = useMemo(() => {
     const d = toDraft(value, 'manual')
     return d ? findDuplicate(d, ignoreId) : undefined
-  }, [value, ignoreId])
+  }, [value, ignoreId, operations])
 
   const flag = (k: keyof NonNullable<typeof flags>) =>
     flags?.[k] ? <p className="mt-1.5 flex items-center gap-1.5 text-[13px] text-amber"><AlertTriangle size={14} /> {flags[k]}</p> : null
@@ -80,7 +88,7 @@ export function OperationForm({ value, onChange, ignoreId, flags }: {
             aria-label="Сумма"
             className="num w-[min(70vw,260px)] bg-transparent text-center !text-[52px] leading-none outline-none placeholder:text-white/20"
           />
-          <span className="text-[30px] opacity-60">€</span>
+          <span className="text-[30px] opacity-60">{value.currency && value.currency !== 'EUR' ? value.currency : '€'}</span>
         </div>
         {flag('amount')}
       </div>
@@ -147,8 +155,8 @@ export function OperationForm({ value, onChange, ignoreId, flags }: {
         />
         <label className="glass relative flex h-12 items-center gap-2 rounded-2xl px-4 text-[15px]">
           <CalendarDays size={17} className="text-mist" />
-          {dayLabel(new Date(value.date + 'T12:00:00').toISOString())}
-          <input type="date" value={value.date} onChange={(e) => e.target.value && set({ date: e.target.value })} className="absolute inset-0 opacity-0" aria-label="Дата" />
+          {Number.isFinite(Date.parse(value.date + 'T12:00:00')) ? dayLabel(value.date + 'T12:00:00') : 'Выберите дату'}
+          <input type="date" value={value.date} onChange={(e) => set({ date: e.target.value })} className="absolute inset-0 opacity-0" aria-label="Дата" />
         </label>
       </div>
       {flag('date')}
