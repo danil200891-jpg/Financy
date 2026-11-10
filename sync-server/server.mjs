@@ -7,16 +7,17 @@ import { createServer as createHttps } from 'node:https'
 import { createServer as createHttp } from 'node:http'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { canonical, sha256 } from './lib/canonical.mjs'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { hostname } from 'node:os'
-import { applyPush, emptyDb, openConflicts, pull, resolveConflict, snapshot } from './lib/engine.mjs'
+import { applyPush, commitPlanning, emptyDb, openConflicts, pull, resolveConflict, snapshot } from './lib/engine.mjs'
 import { loadJson, saveJson } from './lib/files.mjs'
 import { backupDue, createBackup, listBackups, pruneBackups, readBackup } from './lib/backups.mjs'
 import { Pairing, Verifier, newDeviceId, validPublicJwk } from './lib/auth.mjs'
 import { Certs, findOpenssl, lanAddresses, localName } from './lib/tls.mjs'
 
-export const VERSION = '1.0.0'
+export const VERSION = '1.1.0'
 const here = dirname(fileURLToPath(import.meta.url))
 
 export function defaultHome() {
@@ -124,7 +125,7 @@ export async function startServer(opts = {}) {
     if (req.method === 'OPTIONS') return send(res, 204, '', h)
     try {
       if (path === '/ping' && req.method === 'GET')
-        return send(res, 200, { app: 'financy-sync', version: VERSION, serverId: config.serverId, name: config.serverName, hosts: hosts(), time: Date.now() }, h)
+        return send(res, 200, { app: 'financy-sync', capabilities: ['planning-v2'], version: VERSION, serverId: config.serverId, name: config.serverName, hosts: hosts(), time: Date.now() }, h)
 
       if (path === '/pair' && req.method === 'POST') {
         const body = parse(await readBody(req, 64 * 1024))
@@ -164,16 +165,24 @@ export async function startServer(opts = {}) {
         setImmediate(maybeBackup)
         return send(res, 200, { results: next.results, seq: db.seq }, h)
       }
+      if (path === '/planning/commit' && req.method === 'POST') {
+        const command = parse(raw)
+        const result = commitPlanning(db, device.id, command.event, command.baseSeq)
+        if (result.error) return send(res, 409, { error: result.error }, h)
+        if (result.db !== db) { saveJson(dbPath, result.db); db = result.db }
+        touch(); saveState()
+        return send(res, 200, { record: result.record, seq: db.seq }, h)
+      }
       if (path === '/sync/pull' && req.method === 'GET') {
         const since = Math.max(0, Number(url.searchParams.get('since')) || 0)
         const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 500))
         touch()
-        return send(res, 200, { ...pull(db, since, limit), serverId: config.serverId }, h)
+        return send(res, 200, { ...pull(db, since, limit, url.searchParams.get('planning') === '2'), serverId: config.serverId }, h)
       }
       if (path === '/sync/status' && req.method === 'GET') {
         return send(res, 200, {
           serverId: config.serverId, name: config.serverName, version: VERSION, seq: db.seq, hosts: hosts(),
-          lastBackupAt: state.lastBackupAt, lastBackupError: state.lastBackupError, conflicts: openConflicts(db),
+          lastBackupAt: state.lastBackupAt, lastBackupError: state.lastBackupError, conflicts: openConflicts(db).filter((c) => url.searchParams.get('planning') === '2' || c.entity !== 'planning'),
         }, h)
       }
       if (path === '/sync/conflicts/resolve' && req.method === 'POST') {
@@ -183,7 +192,14 @@ export async function startServer(opts = {}) {
         return send(res, 200, { ok: true }, h)
       }
       if (path === '/backups' && req.method === 'GET') return send(res, 200, { backups: listBackups(config.backupDir), dir: config.backupDir }, h)
-      if (path === '/backups/file' && req.method === 'GET') return send(res, 200, readBackup(config.backupDir, String(url.searchParams.get('name') ?? '')), h)
+      if (path === '/backups/file' && req.method === 'GET') {
+        const backup = readBackup(config.backupDir, String(url.searchParams.get('name') ?? ''))
+        if (url.searchParams.get('planning') === '2') return send(res, 200, backup, h)
+        // An old app can still restore its known data. Never expose unknown record kinds.
+        const { planning: _planning, integrity: _integrity, ...legacy } = backup
+        legacy.version = 1
+        return send(res, 200, { ...legacy, integrity: { algorithm: 'sha256', hash: sha256(canonical(legacy)) } }, h)
+      }
       if (path === '/backups' && req.method === 'POST') {
         const kind = parse(raw).kind === 'pre-restore' ? 'pre-restore' : 'manual'
         return send(res, 200, makeBackup(kind), h)

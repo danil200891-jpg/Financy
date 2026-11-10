@@ -1,4 +1,6 @@
-import type { Category, Client, HistoryEntry, Operation } from './types'
+import type { PlanningRecord } from './planning-types'
+import { validPlanning } from '../../sync-server/lib/planning.mjs'
+import type { Category, Client, HistoryEntry, Operation, FinancialRecord } from './types'
 import * as DB from './db'
 import { actions, fingerprint, getState, waitForWrites } from './store'
 import type { EntityKind } from './types'
@@ -6,7 +8,7 @@ import { canonical } from './sync/canonical'
 import { isPaired } from './sync'
 
 export const BACKUP_APP = 'finance-pwa'
-export const BACKUP_VERSION = 1
+export const BACKUP_VERSION = 2
 
 export interface Backup {
   app: typeof BACKUP_APP
@@ -15,10 +17,17 @@ export interface Backup {
   operations: Operation[]
   clients: Client[]
   categories: Category[]
+  planning?: PlanningRecord[]
   history: HistoryEntry[]
 }
 
 const stamp = () => new Date().toISOString().slice(0, 10)
+
+function safePlanningRestore(record: PlanningRecord): PlanningRecord {
+  const current = getState().all.planning.find((r) => r.id === record.id)
+  if (record.kind !== 'movement' || (current?.status === 'confirmed' && canonical(current) === canonical(record))) return record
+  return { ...record, status: 'pending', reason: undefined }
+}
 
 /** iOS PWAs handle the share sheet better than <a download>; fall back to a download link. */
 async function deliver(blob: Blob, name: string) {
@@ -110,7 +119,7 @@ export async function undoRestore() {
     await (await DB.db()).delete('meta', 'preRestore')
     return true
   }
-  await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history })
+  await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history, ...(b.planning ? { planning: b.planning } : {}) })
   await (await DB.db()).delete('meta', 'preRestore')
   await actions.reload()
   return true
@@ -125,6 +134,7 @@ function validOp(o: Operation) {
     && (o.note === undefined || isStr(o.note)) && (o.clientId == null || isStr(o.clientId)) && (o.categoryId == null || isStr(o.categoryId))
     && (o.source === undefined || ['manual', 'camera', 'upload', 'import'].includes(o.source))
     && (o.incomeKind === undefined || ['work', 'shoot', 'oneoff'].includes(o.incomeKind))
+    && (!o.planningPayment || (isStr(o.planningPayment.envelopeId) && Number.isSafeInteger(o.planningPayment.reserved) && o.planningPayment.reserved >= 0))
     && optionalDate(o.createdAt) && optionalDate(o.updatedAt) && optionalDate(o.deletedAt)
 }
 
@@ -138,6 +148,7 @@ export function parseBackup(text: string): Backup {
   if (raw?.app !== BACKUP_APP || !Array.isArray(raw.operations)) throw new Error('Это не резервная копия Finance.')
   if (raw.version !== undefined && (!Number.isInteger(raw.version) || raw.version < 1)) throw new Error('Некорректная версия резервной копии.')
   if (raw.version > BACKUP_VERSION) throw new Error('Копия создана более новой версией приложения. Обновите приложение.')
+  if (raw.planning !== undefined && (!Array.isArray(raw.planning) || raw.planning.some((r) => !validPlanning(r)) || new Set(raw.planning.map((r) => r.id)).size !== raw.planning.length)) throw new Error('Планирование в копии повреждено. Данные не изменены.')
   const bad = raw.operations.filter((o) => !validOp(o)).length
   if (bad) throw new Error(`В копии ${bad} повреждённых операций. Восстановление отменено, данные не изменены.`)
   if ([raw.clients, raw.categories, raw.history].some((records) => records !== undefined && !Array.isArray(records))) throw new Error('В копии повреждён список записей. Восстановление отменено.')
@@ -146,7 +157,7 @@ export function parseBackup(text: string): Backup {
   const history = Array.isArray(raw.history) ? raw.history : []
   const badClient = clients.some((c) => !c || !isStr(c.id) || !isStr(c.name) || (c.aliases !== undefined && (!Array.isArray(c.aliases) || c.aliases.some((alias) => !isStr(alias)))))
   const badCategory = categories.some((c) => !c || !isStr(c.id) || !isStr(c.name) || !['income', 'expense'].includes(c.type))
-  const badHistory = history.some((h) => !h || !isStr(h.id) || !isStr(h.entityId) || !['operation', 'client', 'category'].includes(h.entity) || !['create', 'update', 'delete', 'restore'].includes(h.action) || !isStr(h.at) || !Number.isFinite(Date.parse(h.at)))
+  const badHistory = history.some((h) => !h || !isStr(h.id) || !isStr(h.entityId) || !['operation', 'client', 'category', 'planning'].includes(h.entity) || !['create', 'update', 'delete', 'restore'].includes(h.action) || !isStr(h.at) || !Number.isFinite(Date.parse(h.at)))
   const duplicateIds = [raw.operations, clients, categories, history].some((records) => new Set(records.map((record) => record?.id)).size !== records.length)
   if (badClient || badCategory || badHistory || duplicateIds) throw new Error('В копии повреждены записи или повторяются ID. Восстановление отменено, данные не изменены.')
   if (raw.operations.some((o) => o.currency !== undefined && (!isStr(o.currency) || !/^[A-Za-z]{3}$/.test(o.currency)))) throw new Error('В копии указана некорректная валюта.')
@@ -179,7 +190,7 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
     return { added: r.restored, updated: r.changed, skippedDuplicates: 0, clients: b.clients.filter((c) => !c.deletedAt).length, categories: b.categories.filter((c) => !c.deletedAt).length }
   }
   if (mode === 'replace') {
-    await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history }, { app: BACKUP_APP, version: BACKUP_VERSION, exportedAt: new Date().toISOString() })
+    await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history, ...(b.planning ? { planning: b.planning.map(safePlanningRestore) } : {}) }, { app: BACKUP_APP, version: BACKUP_VERSION, exportedAt: new Date().toISOString() })
     await actions.reload()
     return {
       added: b.operations.filter((o) => !o.deletedAt).length, updated: 0, skippedDuplicates: 0,
@@ -214,7 +225,9 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
   sum.clients = clients.length
   sum.categories = categories.length
 
+  const planning = (b.planning ?? []).filter((r) => newer(r, all.planning.find((p) => p.id === r.id)))
   await DB.commit([
+    ...planning.map((value) => ({ store: 'planning' as const, value: safePlanningRestore(value) })),
     ...ops.map((value) => ({ store: 'operations' as const, value })),
     ...clients.map((value) => ({ store: 'clients' as const, value })),
     ...categories.map((value) => ({ store: 'categories' as const, value })),
@@ -225,7 +238,7 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
 
 /* ---------------- restore as edits (sync-safe) ---------------- */
 
-const LIST: [EntityKind, 'operations' | 'clients' | 'categories'][] = [['operation', 'operations'], ['client', 'clients'], ['category', 'categories']]
+const LIST: [EntityKind, 'operations' | 'clients' | 'categories' | 'planning'][] = [['operation', 'operations'], ['client', 'clients'], ['category', 'categories'], ['planning', 'planning']]
 const content = (r: object) => canonical({ ...r, updatedAt: undefined })
 
 export interface RestorePlan {
@@ -236,27 +249,34 @@ export interface RestorePlan {
   unchanged: number
   /** added after the backup — kept (or, for undo/replace, moved to «Недавно удалённые») */
   newer: number
-  items: { entity: EntityKind; data: Operation | Client | Category; action: 'update' | 'restore' | 'delete' }[]
+  items: { entity: EntityKind; data: FinancialRecord; action: 'update' | 'restore' | 'delete' }[]
 }
 
 /** What restoring `b` would do. Nothing is written. */
-export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categories'>, removeExtra = false): RestorePlan {
+export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categories' | 'planning'>, removeExtra = false): RestorePlan {
   const { all } = getState()
   const plan: RestorePlan = { restored: 0, changed: 0, unchanged: 0, newer: 0, items: [] }
   for (const [entity, list] of LIST) {
-    const local = new Map<string, Operation | Client | Category>(all[list].map((r) => [r.id, r]))
+    if (list === 'planning' && b.planning === undefined) continue
+    const local = new Map<string, FinancialRecord>(all[list].map((r) => [r.id, r]))
     const inBackup = new Set<string>()
-    for (const r of b[list] as (Operation | Client | Category)[]) {
+    for (const r of b[list] as (FinancialRecord)[]) {
       inBackup.add(r.id)
       const cur = local.get(r.id)
       if (cur && content(cur) === content(r)) { plan.unchanged++; continue }
       const back = !cur || (!!cur.deletedAt && !r.deletedAt)
       if (back) plan.restored++; else plan.changed++
-      plan.items.push({ entity, data: r, action: back && cur ? 'restore' : 'update' })
+      plan.items.push({ entity, data: entity === 'planning' ? safePlanningRestore(r as PlanningRecord) : r, action: back && cur ? 'restore' : 'update' })
     }
     for (const cur of all[list]) {
+      // Balance checkpoints and reserve commands are an immutable financial journal.
+      if (list === 'planning' && ['balance', 'movement'].includes((cur as PlanningRecord).kind)) continue
       if (inBackup.has(cur.id) || cur.deletedAt) continue
       plan.newer++
+      if (list === 'planning' && (cur as PlanningRecord).kind === 'envelope' && removeExtra) {
+        plan.items.push({ entity, data: { ...cur, state: 'closed' } as PlanningRecord, action: 'update' })
+        continue
+      }
       if (removeExtra) plan.items.push({ entity, data: { ...cur, deletedAt: new Date().toISOString() }, action: 'delete' })
     }
   }
@@ -264,7 +284,7 @@ export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categori
 }
 
 /** Writes the plan as ordinary edits: history is kept, nothing is hard-deleted, the PC receives it on the next sync. */
-export async function applyAsEdits(b: Pick<Backup, 'operations' | 'clients' | 'categories'>, removeExtra = false) {
+export async function applyAsEdits(b: Pick<Backup, 'operations' | 'clients' | 'categories' | 'planning'>, removeExtra = false) {
   await waitForWrites()
   const plan = planRestore(b, removeExtra)
   actions.putAsEdits(plan.items)

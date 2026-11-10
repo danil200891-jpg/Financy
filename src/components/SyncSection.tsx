@@ -5,7 +5,7 @@ import { cleanHost, validHost, CA_PORT } from '../lib/sync/device'
 import { parseBackup, planRestore, restoreFromBackup, type Backup, type RestorePlan } from '../lib/backup'
 import { toast } from '../lib/toast'
 import { dayLabel, fmt, plural, timeLabel } from '../lib/format'
-import type { Category, Client, Operation } from '../lib/types'
+import type { FinancialRecord, Operation, Client } from '../lib/types'
 import { Card, PrimaryButton, Sheet } from './ui'
 
 const when = (iso: string | null) => (iso ? `${dayLabel(iso)}, ${timeLabel(iso)}` : 'ещё не было')
@@ -48,6 +48,7 @@ export function SyncSection({ onRestored }: { onRestored?: () => void }) {
             </span>
             <RefreshCw size={17} className={`text-fog ${s.phase === 'syncing' ? 'animate-spin' : ''}`} />
           </button>
+          {s.planningSupported === false && <p className="px-4 py-2 text-[13px] text-amber">Для подтверждения резервов нужно обновление Financy Sync. Операции синхронизируются как прежде.</p>}
           <div className="space-y-1.5 px-4 py-3 text-[14px]">
             <p className="flex justify-between gap-3"><span className="text-mist">Синхронизация</span><span className="text-right">{when(s.lastSyncAt)}</span></p>
             <p className="flex justify-between gap-3"><span className="text-mist">Копия на компьютере</span><span className="text-right">{when(s.lastBackupAt)}</span></p>
@@ -197,7 +198,7 @@ function BackupsSheet({ open, onClose, onRestored }: { open: boolean; onClose: (
   )
 }
 
-function describe(c: Conflict, data: Operation | Client | Category) {
+function describe(c: Conflict, data: FinancialRecord) {
   if (c.entity === 'operation') {
     const o = data as Operation
     return `${o.deletedAt ? 'Удалена: ' : ''}${o.title}, ${o.type === 'income' ? '+' : '−'}${fmt(o.amount, o.currency)}, ${dayLabel(o.date).toLowerCase()}${o.note ? `, «${o.note}»` : ''}`

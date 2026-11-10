@@ -8,6 +8,7 @@
 //     fields changed on one side only merge silently; a field changed differently on both sides is a
 //     conflict: the newer edit is kept (an edit always beats a deletion) and BOTH versions are saved
 //     in `conflicts` for the user to review. Nothing is silently lost.
+import { movementError } from './planning.mjs'
 import { canonical, hashRecord } from './canonical.mjs'
 import { ENTITIES, validRecord } from './records.mjs'
 
@@ -16,6 +17,28 @@ const META = new Set(['updatedAt', 'createdAt'])
 
 export const emptyDb = (serverId) => ({ format: 1, serverId, seq: 0, records: {}, versions: {}, conflicts: [], lastChangeAt: null })
 export const keyOf = (entity, id) => `${entity}:${id}`
+
+/** Serial, idempotent reserve commands. Never accept reserve balances through generic LWW. */
+export function commitPlanning(input, deviceId, event, baseSeq, now = new Date().toISOString()) {
+  if (!validRecord('planning', event) || event.kind !== 'movement' || event.deletedAt) return { error: 'invalid-planning' }
+  const key = keyOf('planning', event.id)
+  const previous = input.records[key]
+  if (previous) {
+    const sameCommand = ['kind', 'currency', 'amount', 'from', 'to', 'createdAt'].every((field) => same(previous.data[field], event[field]))
+    return sameCommand ? { db: input, record: previous } : { error: 'planning-id-conflict' }
+  }
+  if (baseSeq !== input.seq) return { error: 'planning-stale' }
+  const data = snapshot(input)
+  const error = movementError(data.operations, data.planning, event, new Date(now))
+  if (error) return { error: 'planning-funds' }
+  const db = structuredClone(input)
+  const confirmed = { ...event, status: 'confirmed', reason: undefined, updatedAt: now }
+  delete confirmed.reason
+  const record = { entity: 'planning', id: event.id, rev: ++db.seq, hash: hashRecord(confirmed), data: confirmed, deviceId, at: now }
+  db.records[key] = record
+  db.lastChangeAt = now
+  return { db, record }
+}
 const same = (a, b) => canonical(a) === canonical(b)
 const maxIso = (a, b) => ((a ?? '') > (b ?? '') ? a : b)
 
@@ -69,7 +92,7 @@ export function applyPush(input, deviceId, changes, now = new Date().toISOString
   for (const ch of changes) {
     const { entity, id, baseRev = 0, hash, data } = ch ?? {}
     const key = keyOf(entity, id)
-    if (!ENTITIES.includes(entity) || !data || data.id !== id || !validRecord(entity, data)) {
+    if ((entity === 'planning' && (data?.kind === 'movement' || db.records[key]?.data.kind === 'movement')) || !ENTITIES.includes(entity) || !data || data.id !== id || !validRecord(entity, data)) {
       results.push({ key, status: 'rejected', reason: 'invalid' }); continue
     }
     if (hashRecord(data) !== hash) { results.push({ key, status: 'rejected', reason: 'integrity' }); continue }
@@ -111,8 +134,8 @@ export function applyPush(input, deviceId, changes, now = new Date().toISOString
 }
 
 /** Records changed after `since`, oldest first, in pages. */
-export function pull(db, since = 0, limit = 500) {
-  const all = Object.values(db.records).filter((r) => r.rev > since).sort((a, b) => a.rev - b.rev)
+export function pull(db, since = 0, limit = 500, planning = true) {
+  const all = Object.values(db.records).filter((r) => r.rev > since && (planning || r.entity !== 'planning')).sort((a, b) => a.rev - b.rev)
   const page = all.slice(0, limit)
   return {
     records: page.map(({ entity, id, rev, hash, data }) => ({ entity, id, rev, hash, data })),
@@ -140,8 +163,8 @@ export function resolveConflict(input, id, now = new Date().toISOString()) {
 
 /** Live and deleted records grouped like the app's JSON backup. */
 export function snapshot(db) {
-  const out = { operations: [], clients: [], categories: [] }
-  const name = { operation: 'operations', client: 'clients', category: 'categories' }
+  const out = { operations: [], clients: [], categories: [], planning: [] }
+  const name = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning' }
   for (const r of Object.values(db.records)) out[name[r.entity]].push(r.data)
   for (const list of Object.values(out)) list.sort((a, b) => a.id.localeCompare(b.id))
   return out

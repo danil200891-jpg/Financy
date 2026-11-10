@@ -9,6 +9,7 @@ export type IncomeKind = 'work' | 'shoot' | 'oneoff'
  * "recently deleted" restorable and makes future cloud sync (last-write-wins by updatedAt) simple.
  */
 export interface Operation {
+  planningPayment?: import('./planning-types').PlanningPayment
   id: string
   type: OpType
   amount: number
@@ -49,7 +50,8 @@ export interface Client {
 }
 
 export type HistoryAction = 'create' | 'update' | 'delete' | 'restore'
-export type EntityKind = 'operation' | 'client' | 'category'
+export type EntityKind = 'operation' | 'client' | 'category' | 'planning'
+export type FinancialRecord = Operation | Client | Category | import('./planning-types').PlanningRecord
 
 /** Append-only change log. */
 export interface HistoryEntry {

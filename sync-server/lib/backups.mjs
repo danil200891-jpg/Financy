@@ -1,5 +1,5 @@
 // Full backups of the synced data in the backup folder (default D:\CODEX\Financy\Backups).
-// Format = the app's own JSON backup (app "finance-pwa", version 1), so a file can also be
+// Format = the app's own JSON backup (app "finance-pwa", version 2), so a file can also be
 // imported by hand in Настройки → «Восстановить из копии». Extra fields: createdBy, kind, counts,
 // sync metadata and an integrity hash.
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -20,7 +20,7 @@ const stamp = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDat
 export function buildBackup(db, kind, now = new Date()) {
   const data = snapshot(db)
   const body = {
-    app: 'finance-pwa', version: 1, createdBy: CREATED_BY, kind, exportedAt: now.toISOString(), serverId: db.serverId,
+    app: 'finance-pwa', version: 2, createdBy: CREATED_BY, kind, exportedAt: now.toISOString(), serverId: db.serverId,
     counts: {
       operations: data.operations.filter((o) => !o.deletedAt).length,
       clients: data.clients.filter((c) => !c.deletedAt).length,
