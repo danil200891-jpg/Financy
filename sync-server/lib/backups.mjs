@@ -1,4 +1,4 @@
-// Full backups of the synced data in the backup folder (default D:\Financy-Backups).
+// Full backups of the synced data in the backup folder (default D:\CODEX\Financy\Backups).
 // Format = the app's own JSON backup (app "finance-pwa", version 1), so a file can also be
 // imported by hand in Настройки → «Восстановить из копии». Extra fields: createdBy, kind, counts,
 // sync metadata and an integrity hash.

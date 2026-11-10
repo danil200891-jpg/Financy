@@ -26,6 +26,9 @@ finance-backup-*.json
 finance-operations-*.csv
 *.backup.json
 backups/
+# Financy Sync copies (D:\CODEX\Financy\Backups)
+/Backups/
+financy-backup-*.json
 
 # OS / editor
 .DS_Store

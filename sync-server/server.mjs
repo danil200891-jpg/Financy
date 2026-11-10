@@ -2,7 +2,7 @@
 //   https://<pc>:47821  sync API for paired devices (signed requests only)
 //   http://<pc>:47820   only the public CA certificate + setup instructions for the iPhone
 //   http://127.0.0.1:47822  admin page, reachable from this computer only
-// No cloud, no dependencies. Data: %LOCALAPPDATA%\Financy-Sync, backups: D:\Financy-Backups.
+// No cloud, no dependencies. Data: %LOCALAPPDATA%\Financy-Sync, backups: D:\CODEX\Financy\Backups.
 import { createServer as createHttps } from 'node:https'
 import { createServer as createHttp } from 'node:http'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
@@ -42,7 +42,7 @@ export async function startServer(opts = {}) {
   const config = {
     serverId: `srv-${randomBytes(9).toString('base64url')}`,
     serverName: hostname(),
-    backupDir: process.env.FINANCY_BACKUP_DIR || (process.platform === 'win32' ? 'D:\\Financy-Backups' : join(home, 'backups')),
+    backupDir: process.env.FINANCY_BACKUP_DIR || (process.platform === 'win32' ? 'D:\\CODEX\\Financy\\Backups' : join(home, 'backups')),
     port: 47821, httpPort: 47820, adminPort: 47822,
     ...loadJson(cfgPath, () => ({}), log),
   }

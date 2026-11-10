@@ -1,13 +1,14 @@
 ﻿# Financy Sync — first-time setup for Windows. Run: double-click «Установить Financy Sync.cmd».
 # What it does (nothing else):
 #   1. copies the server to %LOCALAPPDATA%\Financy-Sync\app
-#   2. creates the backup folder (default D:\Financy-Backups) readable only by you
+#   2. creates the backup folder (default D:\CODEX\Financy\Backups; a re-install keeps the folder
+#      already in use unless -BackupDir is given) readable only by you
 #   3. adds a start-up entry for your user (no system service, no admin rights)
 #   4. OPTIONAL, only if you answer «Y»: a Windows Firewall rule for ports 47820-47821, private networks only
 #   5. starts the server and opens its page
 # Nothing is deleted. Existing data and backups are kept.
 # -NoAutostart (for checks): no start-up entry and no browser window
-param([string]$BackupDir = 'D:\Financy-Backups', [switch]$NoFirewall, [switch]$NoStart, [switch]$NoAutostart)
+param([string]$BackupDir = 'D:\CODEX\Financy\Backups', [switch]$NoFirewall, [switch]$NoStart, [switch]$NoAutostart)
 $ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
 $home2 = Join-Path $env:LOCALAPPDATA 'Financy-Sync'
@@ -48,7 +49,13 @@ Copy-Item -Force (Join-Path $src '*.mjs'), (Join-Path $src 'admin.html') $app
 Copy-Item -Force (Join-Path $src 'lib\*.mjs') (Join-Path $app 'lib')
 Say "Сервер скопирован в $app" Green
 
-# 3. backup folder: D:\Financy-Backups (falls back to Documents if there is no drive D:)
+# 3. backup folder. A re-install keeps the folder the server already uses (unless -BackupDir is given),
+#    so copies are never silently split between two folders.
+$cfgPath = Join-Path $home2 'config.json'
+if (-not $PSBoundParameters.ContainsKey('BackupDir') -and (Test-Path $cfgPath)) {
+  try { $prev = (Get-Content -Raw -Encoding UTF8 $cfgPath | ConvertFrom-Json).payload.backupDir; if ($prev) { $BackupDir = $prev } } catch { }
+}
+# no drive D: -> Documents\Financy-Backups
 if (-not (Test-Path (Split-Path -Qualifier $BackupDir))) {
   $BackupDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Financy-Backups'
   Say "Диска D: нет — копии будут в $BackupDir" Yellow
@@ -62,7 +69,6 @@ if ($created) {
 Say "Папка резервных копий: $BackupDir" Green
 
 # server config: keep existing serverId and devices, only set paths
-$cfgPath = Join-Path $home2 'config.json'
 & $node (Join-Path $app 'write-config.mjs') $cfgPath $BackupDir $openssl
 if ($LASTEXITCODE -ne 0) { Say "Не удалось записать настройки $cfgPath" Red; exit 1 }
 
