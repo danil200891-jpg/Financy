@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Financy Sync</title>
+<style>
+  :root { --abyss:#06070D; --ink:#F2F3F8; --mist:#8B90A6; --fog:#5d6278; --iris:#7c8cff; --income:#3fe0c5; --expense:#ff6b81; --amber:#ffc56b; }
+  * { box-sizing: border-box }
+  body { margin:0; background:radial-gradient(1200px 600px at 20% -10%, #1a1d3a 0%, transparent 60%), var(--abyss); color:var(--ink);
+    font:15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; min-height:100vh }
+  main { max-width:760px; margin:0 auto; padding:32px 20px 60px }
+  h1 { font-size:28px; margin:0; letter-spacing:-.02em }
+  h2 { font-size:15px; color:var(--mist); font-weight:500; margin:28px 4px 10px }
+  .card { background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); border-radius:22px; padding:16px 18px }
+  .row { display:flex; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid rgba(255,255,255,.07) }
+  .row:last-child { border-bottom:0 }
+  .k { flex:1; color:var(--mist) } .v { text-align:right; word-break:break-word }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--income); display:inline-block; margin-right:8px; box-shadow:0 0 12px var(--income) }
+  button { border:0; border-radius:14px; padding:11px 16px; font:600 15px inherit; font-family:inherit; color:#fff; cursor:pointer;
+    background:linear-gradient(120deg,#7c8cff,#9f6bff) }
+  button.ghost { background:rgba(255,255,255,.08); color:var(--ink); font-weight:500 }
+  button.danger { background:rgba(255,107,129,.14); color:var(--expense); font-weight:500 }
+  .code { font:600 44px/1 ui-monospace, Consolas, monospace; letter-spacing:.18em; color:var(--ink); margin:10px 0 }
+  .muted { color:var(--mist) } .small { font-size:13px } .warn { color:var(--amber) } .bad { color:var(--expense) } .ok { color:var(--income) }
+  ol { padding-left:20px; margin:8px 0 } li { margin:4px 0 }
+  pre { white-space:pre-wrap; word-break:break-word; font:12px/1.5 ui-monospace, Consolas, monospace; color:var(--mist); max-height:260px; overflow:auto; margin:0 }
+  code { background:rgba(255,255,255,.08); padding:1px 6px; border-radius:6px }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px }
+</style>
+</head>
+<body>
+<main>
+  <h1>Financy Sync</h1>
+  <p class="muted" id="sub">Загрузка…</p>
+
+  <h2>Состояние</h2>
+  <div class="card" id="status"></div>
+
+  <h2>Подключение iPhone</h2>
+  <div class="card" id="pair"></div>
+
+  <h2>Подключённые устройства</h2>
+  <div class="card" id="devices"></div>
+
+  <h2>Резервные копии</h2>
+  <div class="card" id="backups"></div>
+
+  <h2>Журнал</h2>
+  <div class="card"><pre id="log"></pre></div>
+
+  <div class="actions" style="margin-top:24px"><button class="danger" id="stop">Остановить сервер</button></div>
+  <p class="muted small">После остановки сервер снова запустится при следующем входе в Windows. Данные на iPhone при этом сохраняются.</p>
+</main>
+<script>
+  var H = { 'X-Financy-Admin': '1' }
+  function api(path, method) {
+    return fetch(path, { method: method || 'GET', headers: H }).then(function (r) {
+      var t = r.headers.get('content-type') || ''
+      return (t.indexOf('json') >= 0 ? r.json() : r.text()).then(function (b) { if (!r.ok) throw new Error(b && b.error || r.status); return b })
+    })
+  }
+  function el(id) { return document.getElementById(id) }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] }) }
+  function when(iso) { return iso ? new Date(iso).toLocaleString('ru-RU') : '—' }
+  function row(k, v) { return '<div class="row"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>' }
+  var KIND = { weekly: 'еженедельная', manual: 'вручную', 'pre-restore': 'перед восстановлением' }
+
+  function render(s) {
+    el('sub').textContent = 'Компьютер «' + s.serverName + '», версия ' + s.version
+    var lastSync = s.state.lastDeviceSyncAt
+    el('status').innerHTML =
+      row('Сервер', '<span class="dot"></span>работает') +
+      row('Адреса для iPhone', s.hosts.map(esc).join('<br>')) +
+      row('Последняя синхронизация', when(lastSync)) +
+      row('Последняя резервная копия', when(s.state.lastBackupAt) + (s.state.lastBackupError ? '<br><span class="bad">Ошибка: ' + esc(s.state.lastBackupError) + '</span>' : '')) +
+      row('Данные на компьютере', s.counts.operations + ' операций, ' + s.counts.clients + ' клиентов') +
+      (s.conflicts ? row('Конфликты', '<span class="warn">' + s.conflicts + ' — проверьте в Financy → Настройки</span>') : '') +
+      row('Папка копий', '<code>' + esc(s.backupDir) + '</code>')
+
+    var p = s.pairing
+    var ip = s.hosts.filter(function (h) { return /^\d/.test(h) })[0] || s.hosts[0]
+    el('pair').innerHTML = (p
+      ? '<p class="muted" style="margin:0">Код подключения (действует до ' + new Date(p.expiresAt).toLocaleTimeString('ru-RU') + '):</p><div class="code">' + esc(p.code) + '</div>' +
+        '<p style="margin:0">Адрес компьютера: <b>' + esc(ip) + '</b></p>'
+      : '<p style="margin:0">Чтобы подключить iPhone, получите одноразовый код.</p>') +
+      '<ol class="muted small">' +
+      '<li>Один раз: на iPhone в Safari откройте <code>http://' + esc(ip) + ':' + s.ports.ca + '</code> и установите сертификат по инструкции на странице.</li>' +
+      '<li>В Financy: «Настройки» → «Подключить компьютер» → введите адрес и код.</li>' +
+      '<li>Отпечаток сертификата: <span style="word-break:break-all">' + esc(s.caFingerprint) + '</span></li></ol>' +
+      '<div class="actions">' + (p ? '<button class="ghost" id="cancel">Отменить код</button>' : '<button id="newcode">Получить код</button>') + '</div>'
+    if (el('newcode')) el('newcode').onclick = function () { api('/api/pair', 'POST').then(load) }
+    if (el('cancel')) el('cancel').onclick = function () { api('/api/pair/cancel', 'POST').then(load) }
+
+    var live = s.devices.filter(function (d) { return !d.revoked })
+    el('devices').innerHTML = live.length ? live.map(function (d) {
+      return '<div class="row"><span class="k" style="color:var(--ink)">' + esc(d.name) + '<br><span class="muted small">подключено ' + when(d.pairedAt) + ', последний обмен ' + when(d.lastSeenAt) + '</span></span>' +
+        '<button class="danger" data-revoke="' + esc(d.id) + '">Отключить</button></div>'
+    }).join('') : '<p class="muted" style="margin:0">Пока нет подключённых устройств.</p>'
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function (b) {
+      b.onclick = function () { if (confirm('Отключить устройство? Его данные останутся на нём и на компьютере.')) api('/api/devices/revoke', 'POST', b.dataset.revoke).then(load) }
+    })
+  }
+
+  function loadBackups() {
+    api('/api/backups').then(function (r) {
+      el('backups').innerHTML = (r.backups.length ? r.backups.slice(0, 12).map(function (b) {
+        return row(when(b.createdAt) + ' <span class="muted small">' + (KIND[b.kind] || b.kind) + '</span>',
+          b.valid ? b.counts.operations + ' операций, ' + b.counts.clients + ' клиентов' : '<span class="bad">повреждена</span>')
+      }).join('') : '<p class="muted" style="margin:0">Копий пока нет. Первая появится после синхронизации с iPhone.</p>') +
+        '<p class="muted small">Копия создаётся автоматически раз в неделю; хранятся копии за 30 дней. Восстановление — в Financy на iPhone: «Настройки» → «Резервные копии на компьютере».</p>' +
+        '<div class="actions"><button class="ghost" id="now">Создать копию сейчас</button></div>'
+      el('now').onclick = function () { el('now').disabled = true; api('/api/backup-now', 'POST').then(load, function (e) { alert('Не удалось: ' + e.message); load() }) }
+    })
+  }
+
+  function load() {
+    api('/api/status').then(render, function () { el('sub').innerHTML = '<span class="bad">Сервер не отвечает.</span>' })
+    loadBackups()
+    api('/api/log').then(function (t) { el('log').textContent = t; el('log').scrollTop = 1e9 })
+  }
+  // revoke needs a body: small override
+  var _api = api
+  api = function (path, method, id) {
+    if (path !== '/api/devices/revoke') return _api(path, method)
+    return fetch(path, { method: 'POST', headers: H, body: JSON.stringify({ id: id }) }).then(function (r) { return r.json() })
+  }
+  el('stop').onclick = function () { if (confirm('Остановить сервер синхронизации?')) api('/api/stop', 'POST').then(function () { document.body.innerHTML = '<main><h1>Сервер остановлен</h1><p class="muted">Чтобы запустить снова, выполните Start-Financy-Sync или войдите в Windows заново.</p></main>' }) }
+  load()
+  setInterval(load, 15000)
+</script>
+</body>
+</html>
