@@ -27,8 +27,8 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
     )
   }
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(env(safe-area-inset-bottom),10px)]">
-      <div className="glass-strong relative mx-auto flex max-w-[520px] items-end rounded-[28px] px-1 pb-1.5 shadow-[0_20px_50px_-15px_rgba(0,0,0,0.8)]">
+    <nav className="bottom-nav fixed inset-x-0 bottom-0 z-40 px-3">
+      <div className="glass-strong bottom-nav-surface relative mx-auto flex max-w-[520px] items-end rounded-[28px] px-1 pb-1.5 shadow-[0_20px_50px_-15px_rgba(0,0,0,0.8)]">
         {TABS.map(item)}
       </div>
     </nav>
