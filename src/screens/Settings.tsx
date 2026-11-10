@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ChevronRight, Database, FileJson, FileSpreadsheet, FlaskConical, Plus, RotateCcw, Shapes, Trash2, Undo2, Upload, WifiOff,
 } from 'lucide-react'
@@ -242,8 +242,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
             </div>
           </Card>
 
-          {groups.map((g) => (
-            <section key={g.group}>
+          {groups.map((g, i) => (<Fragment key={g.group}>
+            <section>
               <p className="mb-2 px-1 text-[15px] font-medium text-mist">{g.group}</p>
               <Card className="divide-y divide-line overflow-hidden">
                 {g.items.map((it) => (
@@ -256,9 +256,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
                 ))}
               </Card>
             </section>
-          ))}
-
-          <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />
+            {i === 1 && <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />}
+          </Fragment>))}
 
           <Card className="space-y-3 p-4 text-[14px] text-mist">
             <p className="flex gap-3"><WifiOff size={18} className="mt-0.5 shrink-0" /> Работает без интернета, включая распознавание чеков, после первой загрузки.</p>

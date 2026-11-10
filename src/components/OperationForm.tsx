@@ -136,7 +136,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
 
       <div>
         <p className="mb-2 px-1 text-[14px] text-mist">Категория</p>
-        <div className="grid grid-cols-4 gap-2">
+        <div className={`grid gap-2 ${income ? 'grid-cols-3' : 'grid-cols-4'}`}>
           {cats.filter((c) => c.type === value.type && (!c.archived || c.id === value.categoryId)).map((c) => {
             const on = value.categoryId === c.id
             return (
@@ -146,7 +146,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
                 className={`press flex flex-col items-center gap-1.5 rounded-2xl py-2.5 transition-colors ${on ? 'bg-white/12 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]' : ''}`}
               >
                 <CategoryIcon cat={c} size={40} />
-                <span className={`w-full truncate px-1 text-[12px] ${on ? 'text-ink' : 'text-mist'}`}>{c.name}</span>
+                <span className={`line-clamp-2 w-full px-1 text-[12px] leading-tight [overflow-wrap:anywhere] ${on ? 'text-ink' : 'text-mist'}`}>{c.name}</span>
               </button>
             )
           })}
@@ -157,7 +157,7 @@ export function OperationForm({ value, onChange, ignoreId, flags, fixedType, sug
         <input
           value={value.note}
           onChange={(e) => set({ note: e.target.value })}
-          placeholder="Заметка (необязательно)"
+          placeholder="Заметка"
           className="glass h-12 min-w-0 rounded-2xl px-4 outline-none placeholder:text-fog"
         />
         <label className="glass relative flex h-12 items-center gap-2 rounded-2xl px-4 text-[15px]">

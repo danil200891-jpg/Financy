@@ -231,7 +231,7 @@ export async function startServer(opts = {}) {
       const raw = req.method === 'POST' ? await readBody(req, 64 * 1024) : ''
       const p = url.pathname
       if (p === '/api/status') return send(res, 200, {
-        version: VERSION, serverName: config.serverName, serverId: config.serverId, hosts: hosts(), ports: { sync: config.port, ca: config.httpPort },
+        version: VERSION, serverName: config.serverName, serverId: config.serverId, hosts: hosts(), ports: { sync: ports.sync, ca: ports.ca },
         backupDir: config.backupDir, home, seq: db.seq, counts: Object.fromEntries(Object.entries(snapshot(db)).map(([k, v]) => [k, v.filter((r) => !r.deletedAt).length])), state, pairing: pairing.active() ? { code: pairing.code, expiresAt: new Date(pairing.expiresAt).toISOString() } : null,
         devices: devices.map(({ publicKey, ...d }) => { void publicKey; return d }), conflicts: openConflicts(db).length, caFingerprint: certs.caFingerprint(),
       })
