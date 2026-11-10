@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { MoneySummary } from './Planning'
+import { financials } from '../lib/planning'
 import { useFittedText } from '../lib/use-fitted-text'
 import { Settings2, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import type { Nav } from '../App'
@@ -10,9 +11,9 @@ import { Card, Empty, IconButton, OpRow } from '../components/ui'
 import { Sparkline } from '../components/charts'
 
 /** The hero: a wallet-style card with slowly drifting aurora and a gentle tilt under the finger. */
-function BalanceCard({ net, income, expense, spark, period }: { period: Date; net: number; income: number; expense: number; spark: number[] }) {
-  const balance = useFittedText<HTMLParagraphElement>(net)
-  const m = splitMoney(net)
+function BalanceCard({ free, income, expense, spark }: { free: number | null; income: number; expense: number; spark: number[] }) {
+  const balance = useFittedText<HTMLParagraphElement>(free)
+  const m = free === null ? null : splitMoney(free)
   return (
     <div className="px-4 [perspective:900px]">
       <div
@@ -20,14 +21,12 @@ function BalanceCard({ net, income, expense, spark, period }: { period: Date; ne
         style={{ background: 'linear-gradient(135deg,rgba(86,101,255,.35),rgba(20,22,40,.8),rgba(47,217,189,.14))' }}
       >
         <div className="flex items-center justify-between text-white/80">
-          <span className="text-[15px] font-medium">Итог за {monthName(period)}</span>
+          <span className="text-[15px] font-medium">Свободные деньги</span>
           <span className="rounded-full bg-white/15 px-2.5 py-1 text-[12px] font-medium backdrop-blur">EUR</span>
         </div>
 
-        <p ref={balance} className="num mt-2 whitespace-nowrap font-display text-[36px] leading-none font-semibold tracking-[-0.035em] text-white">
-          {m.sign}
-          {m.int}
-          <span className="text-[0.59em] text-white/60">,{m.frac} €</span>
+        <p aria-label="Свободные деньги" ref={balance} className="num mt-2 whitespace-nowrap font-display text-[36px] leading-none font-semibold tracking-[-0.035em] text-white">
+          {m ? <>{m.sign}{m.int}<span className="text-[0.59em] text-white/60">,{m.frac} €</span></> : '—'}
         </p>
 
         <div className="-mx-1 mt-1 h-11">
@@ -55,6 +54,8 @@ function BalanceCard({ net, income, expense, spark, period }: { period: Date; ne
 
 export function Home({ nav }: { nav: Nav }) {
   const ops = useStore((s) => s.operations)
+  const planning = useStore((s) => s.planning)
+  const money = useMemo(() => financials(ops, planning), [ops, planning])
   const clients = useStore((s) => s.clients)
   const cats = useStore((s) => s.categories)
 
@@ -78,7 +79,7 @@ export function Home({ nav }: { nav: Nav }) {
         </IconButton>
       </header>
 
-      <BalanceCard net={t.net} income={t.income} expense={t.expense} spark={spark} period={period} />
+      <BalanceCard free={money.free} income={t.income} expense={t.expense} spark={spark} />
 
       {/* Primary entry points — sized for the thumb. */}
       <div className="mt-4 grid grid-cols-2 gap-3 px-4">
@@ -93,7 +94,7 @@ export function Home({ nav }: { nav: Nav }) {
         ))}
       </div>
 
-      <div className="mt-4 px-4"><MoneySummary onSetup={() => { nav.goTab('planning') }} /></div>
+      <div className="mt-4 px-4"><MoneySummary period={period} net={t.net} money={money} onSetup={() => { nav.goTab('planning') }} /></div>
 
       {recent.length === 0 && (
         <Card className="mx-4 mt-7">

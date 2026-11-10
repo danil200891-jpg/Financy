@@ -4,7 +4,7 @@ import { Card, PrimaryButton, Sheet } from '../components/ui'
 import { useStore } from '../lib/store'
 import { distribution, financials, localDay, obligations, projectedPlanning, reserve, savePlan, savePlanWithReserve, closePlan, nextPaymentPeriod } from '../lib/planning'
 import type { PlanningRecord } from '../lib/planning-types'
-import { fmt } from '../lib/format'
+import { fmt, monthName } from '../lib/format'
 import { textToCents } from '../components/OperationForm'
 import { toast } from '../lib/toast'
 import { useSyncStatus } from '../lib/sync'
@@ -18,16 +18,14 @@ const signedCents = (value: string) => {
 }
 type Modal = { kind: 'balance' | 'envelope' | 'move' | 'distribution' | 'history'; record?: PlanningRecord }
 
-export function MoneySummary({ onSetup }: { onSetup: () => void }) {
-  const operations = useStore((s) => s.operations)
-  const planning = useStore((s) => s.planning)
-  const money = useMemo(() => financials(operations, planning), [operations, planning])
+export function MoneySummary({ period, net, money, onSetup }: { period: Date; net: number; money: ReturnType<typeof financials>; onSetup: () => void }) {
   return <Card className="p-4">
-    <div className="flex items-center justify-between gap-2"><p className="text-[14px] text-mist">Деньги сейчас · EUR</p><button onClick={onSetup} aria-label="Настроить баланс" className="press grid h-11 w-11 place-items-center rounded-full bg-white/5"><Settings2 size={17} /></button></div>
-    {money.balance === null ? <button onClick={onSetup} className="press py-2 text-left text-[16px] font-semibold text-iris">Укажите фактический остаток</button> : <div className="grid grid-cols-3 gap-2">
-      {[['Всего', money.balance], ['В резерве', money.reserved], ['Свободно', money.free!]].map(([name, amount]) => <div key={name}><p className="text-[12px] text-mist">{name}</p><p className={`num mt-1 text-[16px] font-semibold ${Number(amount) < 0 ? 'text-expense' : name === 'Свободно' ? 'text-income' : ''}`}>{fmt(Number(amount))}</p></div>)}
-    </div>}
-    {money.pending.length > 0 && <p className="mt-3 text-[12px] text-amber">Предварительных движений: {money.pending.length}. Они ещё не входят в подтверждённый резерв.</p>}
+    <div className="grid grid-cols-2 gap-3">
+      <div><p className="flex min-h-11 items-center text-[12px] text-mist">Итог за {monthName(period)}</p><p aria-label="Итог месяца" className={'num mt-1 text-[16px] font-semibold ' + (net < 0 ? 'text-expense' : 'text-income')}>{fmt(net)}</p></div>
+      <div><div className="flex min-h-11 items-center justify-between gap-1"><p className="text-[12px] text-mist">В резерве</p><button onClick={onSetup} aria-label="Настроить баланс" className="press grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5"><Settings2 size={17} /></button></div><p aria-label="Подтверждённый резерв" className="num mt-1 text-[16px] font-semibold text-iris">{fmt(money.reserved)}</p></div>
+    </div>
+    {money.balance === null && <button onClick={onSetup} className="press mt-3 min-h-11 text-left text-[14px] font-semibold text-iris">Укажите фактический остаток</button>}
+    {money.pending.length > 0 && <p className="mt-3 text-[12px] text-amber">Ожидает синхронизации: {money.pending.length}</p>}
   </Card>
 }
 

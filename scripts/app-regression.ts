@@ -6,6 +6,7 @@ import { actions, getState, initStore, waitForWrites } from '../src/lib/store'
 import * as DB from '../src/lib/db'
 import * as backup from '../src/lib/backup'
 import { textToCents, toDraft, emptyForm } from '../src/components/OperationForm'
+import { fmt, monthName } from '../src/lib/format'
 import { byPeriod, dailyCumulative, monthly, totals } from '../src/lib/stats'
 import { parseText } from '../src/lib/parse'
 import { parseRecognized } from '../src/lib/receipt'
@@ -434,6 +435,41 @@ export async function runAppRegression() {
   actions.savePlanning({ ...release, status: 'confirmed' }); await waitForWrites()
   check(financials(getState().operations, getState().planning).reserves[simple.id] === 0 && !document.querySelector('main')!.textContent!.includes('Synthetic simple plan'), 'Closed empty plan did not move to archive')
   console.log('PASS inline plan expansion without keyboard/modal, preview, insufficient funds, duplicate-tap guard, automatic collapse, reserve reduction, independent metadata edit and safe archive')
+
+  await click('Главная', document.querySelector('nav')!)
+  const displayed = (label: string) => document.querySelector(`[aria-label="${label}"]`)!.textContent!.replace(/\s/g, '').replace('−', '-')
+  const formatted = (cents: number) => fmt(cents).replace(/\s/g, '')
+  const checkHome = (period = new Date()) => {
+    const money = financials(getState().operations, getState().planning)
+    const monthlyNet = totals(byPeriod(getState().operations, 'month', period)).net
+    check(displayed('Свободные деньги') === formatted(money.free!), 'Hero does not show current confirmed free money')
+    check(displayed('Подтверждённый резерв') === formatted(money.reserved), 'Home reserve includes unconfirmed requests')
+    check(displayed('Итог месяца') === formatted(monthlyNet), 'Month result subtracts reserve or uses the wrong month')
+    check(document.querySelector('main')!.textContent!.includes('Итог за ' + monthName(period)), 'Selected month label incorrect')
+  }
+  checkHome()
+  const beforeHomeReserve = financials(getState().operations, getState().planning).free!
+  const homeReserve = await savePlan({ kind: 'movement', amount: 10000, from: null, to: recurring.id, status: 'pending' })
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve, 'Pending reserve reduced free cash')
+  actions.savePlanning({ ...homeReserve, status: 'confirmed' }); await waitForWrites(); await wait()
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve - 10000, 'Confirmed reserve not deducted exactly once')
+  const homeRelease = await savePlan({ kind: 'movement', amount: 4000, from: recurring.id, to: null, status: 'pending' })
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve - 10000, 'Pending release increased free cash')
+  actions.savePlanning({ ...homeRelease, status: 'confirmed' }); await waitForWrites(); await wait()
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve - 6000, 'Reserve reduction did not release correct cash')
+  actions.addOperation(draft('Synthetic home income', 5000, 'income'))
+  actions.addOperation(draft('Synthetic home expense', 1200))
+  const previousMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 15, 12)
+  actions.addOperation({ ...draft('Synthetic previous month income', 8765, 'income'), date: previousMonth.toISOString() })
+  await waitForWrites(); await wait(); checkHome()
+  const currentFree = displayed('Свободные деньги')
+  await click('Предыдущий месяц'); checkHome(previousMonth)
+  check(displayed('Свободные деньги') === currentFree, 'Month selection changed current available cash')
+  await click('Следующий месяц'); checkHome()
+  await click('Настроить баланс'); await click('Настройки планирования'); await click('Настроить баланс')
+  check(!!document.querySelector('input[aria-label="Фактический баланс"]'), 'Initial balance settings inaccessible from Home')
+  await click('Отмена'); await click('Главная', document.querySelector('nav')!)
+  console.log('PASS Home current free cash, confirmed/pending reserve and release, monthly net without double deduction, month switching and balance settings')
 
   let updateChecks = 0
   watchUpdates({ update: async () => { updateChecks++ } } as unknown as ServiceWorkerRegistration)
