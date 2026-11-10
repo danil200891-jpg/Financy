@@ -1,0 +1,203 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/onest';
+@import '@fontsource-variable/unbounded';
+
+@theme {
+  --font-sans: 'Onest Variable', -apple-system, system-ui, sans-serif;
+  --font-display: 'Unbounded Variable', 'Onest Variable', system-ui, sans-serif;
+
+  --color-abyss: #06070d;
+  --color-deep: #0d0f1a;
+  --color-ink: #f2f3f8;
+  --color-mist: #8b90a6;
+  --color-fog: #5a5f75;
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-glass: rgba(255, 255, 255, 0.055);
+  --color-glass-hi: rgba(255, 255, 255, 0.09);
+  --color-iris: #7c8cff;
+  --color-violet: #9f6bff;
+  --color-income: #3fe0c5;
+  --color-expense: #ff6b81;
+  --color-amber: #ffc56b;
+
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+:root {
+  color-scheme: dark;
+  --sat: env(safe-area-inset-top);
+  --sab: env(safe-area-inset-bottom);
+}
+
+html,
+body {
+  background: var(--color-abyss);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  height: 100%;
+}
+
+#root {
+  min-height: 100%;
+}
+
+body {
+  /* soft ambient aurora behind everything */
+  background:
+    radial-gradient(120% 60% at 10% -10%, rgba(124, 140, 255, 0.18), transparent 60%),
+    radial-gradient(90% 50% at 110% 10%, rgba(159, 107, 255, 0.14), transparent 60%),
+    var(--color-abyss);
+  background-attachment: fixed;
+}
+
+button {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* iOS zooms on inputs below 16px */
+input,
+textarea {
+  font-size: 17px;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.glass {
+  background: var(--color-glass);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--color-line);
+}
+
+.glass-strong {
+  background: rgba(18, 20, 32, 0.72);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pt-safe {
+  padding-top: calc(var(--sat) + 12px);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.press {
+  transition: transform 160ms var(--ease-spring), opacity 160ms;
+}
+.press:active {
+  transform: scale(0.96);
+  opacity: 0.85;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes push-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes draw {
+  from {
+    stroke-dashoffset: var(--len);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes aurora {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-8%, 6%) scale(1.15);
+  }
+}
+
+.anim-sheet {
+  animation: sheet-up 420ms var(--ease-spring);
+}
+.anim-fade {
+  animation: fade-in 260ms ease-out;
+}
+.anim-screen {
+  animation: screen-in 320ms var(--ease-spring);
+}
+.anim-push {
+  animation: push-in 380ms var(--ease-spring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-iris);
+  outline-offset: 2px;
+  border-radius: 12px;
+}

@@ -1,0 +1,45 @@
+{
+  "name": "finance",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/copy-ocr.mjs",
+    "dev": "vite --host",
+    "prebuild": "node scripts/copy-ocr.mjs",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host",
+    "dev:https": "node scripts/copy-ocr.mjs && vite --host --mode https",
+    "iphone": "npm run build && vite preview --host --mode https --port 4443",
+    "cert": "node scripts/local-cert.mjs",
+    "iphone:http": "npm run build && vite preview --host --mode lan-http --port 4180",
+    "check": "tsc -b"
+  },
+  "dependencies": {
+    "@fontsource-variable/onest": "^5.3.1",
+    "@fontsource-variable/unbounded": "^5.3.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/rus": "^1.0.0",
+    "@tesseract.js-data/spa": "^1.0.0",
+    "idb": "^8.0.4",
+    "lucide-react": "^1.71.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "sharp": "^0.35.5",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7",
+    "vite-plugin-pwa": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

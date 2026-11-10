@@ -1,0 +1,43 @@
+# dependencies & build output
+node_modules
+dist
+*.tsbuildinfo
+
+# generated at build time from node_modules (scripts/copy-ocr.mjs)
+public/ocr
+
+# local HTTPS certificates and keys — NEVER commit
+.cert
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+*.csr
+*.srl
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# personal financial data: backups and exports from the app
+finance-backup-*.json
+finance-operations-*.csv
+*.backup.json
+backups/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# local tool settings
+.claude/settings.local.json
+
+# MCP browser test artefacts
+.playwright-mcp/
