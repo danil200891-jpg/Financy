@@ -1,37 +1,26 @@
 import { useId, useState } from 'react'
 import { fmt, fmtShort, monthShort } from '../lib/format'
+import { sampleBalancePoints, type FreeBalanceSeries } from '../lib/free-balance-series'
 import { smoothPath } from '../lib/sparkline'
 
-export function Sparkline({ data, height = 64, color = '#ffffff' }: { data: number[]; height?: number; color?: string }) {
-  const id = useId()
-  const w = 300
-  if (data.length < 2) data = [0, ...data, ...(data.length ? [] : [0])]
-  const min = Math.min(...data, 0)
-  const max = Math.max(...data, 1)
-  const pts = data.map((v, i) => [(i / (data.length - 1)) * w, height - 4 - ((v - min) / (max - min)) * (height - 8)] as [number, number])
+export function Sparkline({ data, height = 64, color = '#3fe0c5' }: { data: FreeBalanceSeries; height?: number; color?: string }) {
+  const id = useId(), w = 300
+  const samples = sampleBalancePoints(data.points)
+  const values = samples.map((point) => point.value)
+  const low = values.length ? Math.min(...values) : 0, high = values.length ? Math.max(...values) : 0, span = Math.max(1, high - low)
+  const pts = samples.map((point) => [(point.time - data.start) / Math.max(1, data.end - data.start) * w,
+    high === low ? height / 2 : height - 6 - (point.value - low) / span * (height - 12)] as [number, number])
   const line = smoothPath(pts)
-  return (
-    <svg key={data.join(',')} role="img" aria-label="Накопительный итог доходов и расходов по дням" viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="h-full w-full overflow-visible">
-      <defs>
-        <linearGradient id={id} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0" stopColor={color} stopOpacity="0.35" />
-          <stop offset="1" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={`${line} L${w},${height} L0,${height} Z`} fill={`url(#${id})`} />
-      <path
-        d={line}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        vectorEffect="non-scaling-stroke"
-        pathLength={1}
-        style={{ filter: `drop-shadow(0 0 2px ${color}55)`, strokeDasharray: 1, ['--len' as string]: 1, animation: 'draw 900ms var(--ease-spring) both' }}
-      />
-    </svg>
-  )
+  const fingerprint = samples.map((p) => p.time + ':' + p.value).join(',')
+  return <svg key={fingerprint} role="img" aria-label="Свободные деньги: операции и подтверждённые резервы" viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="h-full w-full overflow-visible">
+    <defs><linearGradient id={id} x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor={color} stopOpacity="0.16" /><stop offset="1" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+    {pts.length > 1 && <>
+      <path className="anim-fade" d={`${line} L${pts[pts.length - 1][0]},${height} L${pts[0][0]},${height} Z`} fill={`url(#${id})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength={1}
+        style={{ filter: `drop-shadow(0 0 2px ${color}44)`, strokeDasharray: 1, ['--len' as string]: 1, animation: 'draw 700ms var(--ease-spring) both' }} />
+    </>}
+    {pts.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="1.5" fill={color} />}
+  </svg>
 }
 
 export function MonthlyBars({ data }: { data: { m: number; income: number; expense: number }[] }) {

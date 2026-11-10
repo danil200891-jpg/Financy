@@ -13,6 +13,8 @@ import { parseRecognized } from '../src/lib/receipt'
 import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
+import { freeBalanceSeries, sampleBalancePoints } from '../src/lib/free-balance-series'
+import type { PlanningRecord } from '../src/lib/planning-types'
 import { smoothSegments, smoothPath } from '../src/lib/sparkline'
 import { incomeSources } from '../src/lib/income-sources'
 import { watchUpdates, checkForUpdate } from '../src/lib/updates'
@@ -103,6 +105,48 @@ export async function runAppRegression() {
   const future = { ...income, date: new Date(2026, 10, 20).toISOString() }
   check(dailyCumulative([future], fixed).length === 10, 'Future transaction extended today sparkline')
   check(byPeriod([future], 'month', fixed).length === 1 && monthly([future], 2, fixed)[1].income === 10000, 'Monthly/year boundaries incorrect')
+  const at = (day: number, hour = 12) => new Date(2026, 10, day, hour).toISOString()
+  const graphCommon = { currency: 'EUR' as const, createdAt: at(0), updatedAt: at(0) }
+  const graphPlans: PlanningRecord[] = [
+    { ...graphCommon, id: 'graph-balance', kind: 'balance', amount: 100000, at: at(0) },
+    { ...graphCommon, id: 'graph-rent', kind: 'envelope', name: 'Synthetic graph rent', mode: 'goal', frequency: 'once', target: 80000, state: 'active', priority: 1 },
+    { ...graphCommon, id: 'graph-goal', kind: 'envelope', name: 'Synthetic graph goal', mode: 'goal', frequency: 'once', target: 50000, state: 'active', priority: 2 },
+    { ...graphCommon, id: 'graph-add', kind: 'movement', createdAt: at(3), amount: 25000, from: null, to: 'graph-rent', status: 'confirmed' },
+    { ...graphCommon, id: 'graph-release', kind: 'movement', createdAt: at(4), amount: 5000, from: 'graph-rent', to: null, status: 'confirmed' },
+    { ...graphCommon, id: 'graph-transfer', kind: 'movement', createdAt: at(5), amount: 3000, from: 'graph-rent', to: 'graph-goal', status: 'confirmed' },
+    { ...graphCommon, id: 'graph-pending', kind: 'movement', createdAt: at(6), amount: 9000, from: null, to: 'graph-rent', status: 'pending' },
+  ]
+  const graphOps: Operation[] = [
+    { ...income, id: 'graph-income', date: at(1), amount: 50000 },
+    { ...expense, id: 'graph-expense', date: at(2), amount: 12000 },
+    { ...expense, id: 'graph-payment', date: at(7), amount: 10000, planningPayment: { envelopeId: 'graph-rent', reserved: 10000 } },
+  ]
+  const graph = (ops = graphOps, plans = graphPlans) => freeBalanceSeries(ops, plans, fixed, fixed)
+  const valueAt = (day: number, series = graph()) => series.points.find((p) => p.time === Date.parse(at(day)))?.value
+  check(valueAt(1) === 150000 && valueAt(2) === 138000, 'Free graph income/expense chronology wrong')
+  check(valueAt(3) === 113000 && valueAt(4) === 118000 && valueAt(5) === 118000, 'Free graph reserve/release/transfer wrong')
+  check(valueAt(7) === 118000 && graph().points.at(-1)?.value === 118000, 'Linked reserve expense charged free cash twice')
+  check(!graph().points.some((p) => p.time === Date.parse(at(6))), 'Pending reserve invented a graph movement')
+  check(freeBalanceSeries(graphOps, graphPlans, new Date(2026, 9, 1), fixed).points.at(-1)?.value === 100000, 'November reserve leaked into October graph')
+  check(!freeBalanceSeries(graphOps, graphPlans, new Date(2026, 11, 1), fixed).points.length, 'Future graph invented balances')
+  check(!graph(graphOps, graphPlans.filter((p) => p.kind !== 'balance')).points.length, 'Graph invented an unknown opening balance')
+  const editedGraphOps = graphOps.map((o) => o.id === 'graph-income' ? { ...o, amount: 60000 } : o)
+  check(graph(editedGraphOps).points.at(-1)?.value === 128000, 'Editing income did not rebuild graph')
+  const deletedGraphOps = graphOps.map((o) => o.id === 'graph-expense' ? { ...o, deletedAt: at(9) } : o)
+  check(graph(deletedGraphOps).points.at(-1)?.value === 130000, 'Deleting expense did not rebuild graph')
+  const changedPayment = graphOps.map((o) => o.id === 'graph-payment' ? { ...o, amount: 6000 } : o)
+  check(graph(changedPayment).points.at(-1)?.value === 118000, 'Editing linked payment double-counted reserve')
+  for (const operations of [graphOps, editedGraphOps, deletedGraphOps, changedPayment]) {
+    for (const plans of [graphPlans, [...graphPlans, { ...graphCommon, id: 'graph-correction', kind: 'balance' as const, amount: 90000, at: at(8) }]]) {
+      check(graph(operations, plans).points.at(-1)?.value === financials(operations, plans, fixed).free, 'Graph endpoint differs from actual free money')
+    }
+  }
+  const densePoints = Array.from({ length: 10000 }, (_, i) => ({ time: i, value: Math.round(Math.sin(i) * 1000) }))
+  const sampled = sampleBalancePoints(densePoints)
+  check(sampled.length <= 600 && sampled[0] === densePoints[0] && sampled.at(-1) === densePoints.at(-1) && sampled.every((p, i) => !i || p.time > sampled[i - 1].time), 'Graph sampling is unbounded or changes chronology')
+  check(Math.max(...sampled.map(p => p.value)) === 1000 && Math.min(...sampled.map(p => p.value)) === -1000, 'Sampling lost true extrema')
+  console.log('PASS chronological free-money graph: income/expense edits/deletions, confirmed reserves, releases/transfers, linked payments, checkpoints, month boundaries and bounded 10000-point rendering')
+
   const initial = JSON.stringify(await DB.backupSnapshot())
   const originalPut = IDBObjectStore.prototype.put
   let failNext = true

@@ -20,9 +20,10 @@ type Modal = { kind: 'balance' | 'envelope' | 'move' | 'distribution' | 'history
 
 export function MoneySummary({ period, net, money, onSetup }: { period: Date; net: number; money: ReturnType<typeof financials>; onSetup: () => void }) {
   return <Card className="p-4">
-    <div className="grid grid-cols-2 gap-3">
-      <div><p className="flex min-h-11 items-center text-[12px] text-mist">Итог за {monthName(period)}</p><p aria-label="Итог месяца" className={'num mt-1 text-[16px] font-semibold ' + (net < 0 ? 'text-expense' : 'text-income')}>{fmt(net)}</p></div>
-      <div><div className="flex min-h-11 items-center justify-between gap-1"><p className="text-[12px] text-mist">В резерве</p><button onClick={onSetup} aria-label="Настроить баланс" className="press grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5"><Settings2 size={17} /></button></div><p aria-label="Подтверждённый резерв" className="num mt-1 text-[16px] font-semibold text-iris">{fmt(money.reserved)}</p></div>
+    <div className="mb-2 flex items-center justify-between gap-2"><p className="text-[14px] font-medium text-mist">Финансы за {monthName(period)}</p><button onClick={onSetup} aria-label="Настроить баланс" className="press grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5"><Settings2 size={17} /></button></div>
+    <div className="grid grid-cols-2 divide-x divide-line">
+      <div className="pr-3"><p className="flex min-h-7 items-center text-[12px] text-mist">Итог за {monthName(period)}</p><p aria-label="Итог месяца" className={'num mt-1 text-[16px] font-semibold ' + (net < 0 ? 'text-expense' : 'text-income')}>{fmt(net)}</p></div>
+      <div className="pl-3"><p className="flex min-h-7 items-center text-[12px] text-mist">В резерве</p><p aria-label="Подтверждённый резерв" className="num mt-1 text-[16px] font-semibold text-iris">{fmt(money.reserved)}</p></div>
     </div>
     {money.balance === null && <button onClick={onSetup} className="press mt-3 min-h-11 text-left text-[14px] font-semibold text-iris">Укажите фактический остаток</button>}
     {money.pending.length > 0 && <p className="mt-3 text-[12px] text-amber">Ожидает синхронизации: {money.pending.length}</p>}

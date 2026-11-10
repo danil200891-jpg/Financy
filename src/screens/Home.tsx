@@ -5,13 +5,14 @@ import { useFittedText } from '../lib/use-fitted-text'
 import { Settings2, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import type { Nav } from '../App'
 import { useStore } from '../lib/store'
-import { byPeriod, dailyCumulative, totals } from '../lib/stats'
+import { freeBalanceSeries, type FreeBalanceSeries } from '../lib/free-balance-series'
+import { byPeriod, totals } from '../lib/stats'
 import { cap, fmtShort, monthName, splitMoney } from '../lib/format'
 import { Card, Empty, IconButton, OpRow } from '../components/ui'
 import { Sparkline } from '../components/charts'
 
 /** The hero: a wallet-style card with slowly drifting aurora and a gentle tilt under the finger. */
-function BalanceCard({ free, income, expense, spark }: { free: number | null; income: number; expense: number; spark: number[] }) {
+function BalanceCard({ free, income, expense, spark }: { free: number | null; income: number; expense: number; spark: FreeBalanceSeries }) {
   const balance = useFittedText<HTMLParagraphElement>(free)
   const m = free === null ? null : splitMoney(free)
   return (
@@ -30,7 +31,7 @@ function BalanceCard({ free, income, expense, spark }: { free: number | null; in
         </p>
 
         <div className="-mx-1 mt-1 h-11">
-          <Sparkline data={spark} color="#ffffff" />
+          <Sparkline data={spark} />
         </div>
 
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -64,7 +65,7 @@ export function Home({ nav }: { nav: Nav }) {
   const period = new Date(today.getFullYear(), today.getMonth() + offset, 1)
   const month = useMemo(() => byPeriod(ops, 'month', period), [ops, offset, today.getMonth(), today.getFullYear()])
   const t = useMemo(() => totals(month), [month])
-  const spark = useMemo(() => dailyCumulative(ops.filter((o) => Date.parse(o.date) <= +today), offset === 0 ? today : new Date(period.getFullYear(), period.getMonth() + 1, 0)), [ops, offset, today.getDate()])
+  const spark = useMemo(() => freeBalanceSeries(ops, planning, period, today), [ops, planning, offset, today.getDate(), today.getMonth(), today.getFullYear()])
   const recent = ops.slice(0, 6)
 
   return (
