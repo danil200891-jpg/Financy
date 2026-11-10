@@ -63,6 +63,7 @@ export async function runDriveRegression() {
     },
   } } } })
   let pickerChoice: string | undefined
+  let pickerFailure = false
   let pickerCallback: ((data: object) => void) | undefined
   class MockView {
     setMode(value: string) { check(value === 'list', 'Picker should not require thumbnail access'); return this }
@@ -77,13 +78,19 @@ export async function runDriveRegression() {
     setAppId(value: string) { check(value === '12345', 'Incorrect Picker app project'); return this }
     setOrigin(value: string) { check(value === location.origin, 'Incorrect Picker origin'); return this }
     setLocale() { return this }
+    setTitle(value: string) { check(value.includes('Financy Backup'), 'Picker does not identify the required folder'); return this }
     setCallback(callback: (data: object) => void) { pickerCallback = callback; return this }
-    build() { return { setVisible() { if (pickerChoice === FOLDER_ID) folderAccessible = true; pickerCallback!({ action: pickerChoice ? 'picked' : 'cancel', docs: pickerChoice ? [{ id: pickerChoice }] : [] }) } } }
+    build() { return { setVisible(visible: boolean) { if (!visible) return; if (pickerChoice === FOLDER_ID) folderAccessible = true; pickerCallback!({ action: pickerFailure ? 'error' : pickerChoice ? 'picked' : 'cancel', docs: pickerChoice ? [{ id: pickerChoice }] : [] }) } } }
   }
   Object.assign((window as unknown as { google: object }).google, { picker: { DocsView: MockView, PickerBuilder: MockPicker } })
   check(await pickDriveFolder(syntheticToken) === undefined, 'Picker cancellation did not cancel')
   pickerChoice = 'synthetic-selected-folder'
   check(await pickDriveFolder(syntheticToken) === pickerChoice, 'Picker did not return granted folder')
+  pickerFailure = true
+  let pickerError = ''
+  try { await pickDriveFolder(syntheticToken) } catch (error) { pickerError = (error as Error).message }
+  check(pickerError.includes('одного Google Drive API недостаточно') && !pickerError.includes(syntheticToken), 'Picker key error did not explain restrictions safely')
+  pickerFailure = false
   console.log('PASS folder-only Google Picker, scoped credentials, origin, selection and cancellation')
   window.fetch = async (input, init = {}) => {
     const url = new URL(String(input))
