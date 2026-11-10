@@ -39,10 +39,10 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto min-h-full max-w-[520px] pb-[calc(env(safe-area-inset-bottom)+110px)]">
+    <div className="mx-auto min-h-full max-w-[520px]">
       {/* status-bar blur so content never collides with the notch / Dynamic Island */}
       <div className="fixed inset-x-0 top-0 z-30 h-[env(safe-area-inset-top)] bg-abyss/75 backdrop-blur-xl" />
-      <main key={tab} className="anim-screen">
+      <main key={tab} className="anim-screen app-content">
         {tab === 'home' && <Home nav={nav} />}
         {tab === 'planning' && <Planning />}
         {tab === 'history' && <History nav={nav} />}

@@ -6,12 +6,15 @@ import { actions, getState, initStore, waitForWrites } from '../src/lib/store'
 import * as DB from '../src/lib/db'
 import * as backup from '../src/lib/backup'
 import { textToCents, toDraft, emptyForm } from '../src/components/OperationForm'
+import { fmt, monthName } from '../src/lib/format'
 import { byPeriod, dailyCumulative, monthly, totals } from '../src/lib/stats'
 import { parseText } from '../src/lib/parse'
 import { parseRecognized } from '../src/lib/receipt'
 import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
+import { freeBalanceSeries, sampleBalancePoints, balanceChartPoints } from '../src/lib/free-balance-series'
+import type { PlanningRecord } from '../src/lib/planning-types'
 import { smoothSegments, smoothPath } from '../src/lib/sparkline'
 import { incomeSources } from '../src/lib/income-sources'
 import { watchUpdates, checkForUpdate } from '../src/lib/updates'
@@ -102,6 +105,67 @@ export async function runAppRegression() {
   const future = { ...income, date: new Date(2026, 10, 20).toISOString() }
   check(dailyCumulative([future], fixed).length === 10, 'Future transaction extended today sparkline')
   check(byPeriod([future], 'month', fixed).length === 1 && monthly([future], 2, fixed)[1].income === 10000, 'Monthly/year boundaries incorrect')
+  const at = (day: number, hour = 12) => new Date(2026, 10, day, hour).toISOString()
+  const graphCommon = { currency: 'EUR' as const, createdAt: at(0), updatedAt: at(0) }
+  const graphPlans: PlanningRecord[] = [
+    { ...graphCommon, id: 'graph-balance', kind: 'balance', amount: 100000, at: at(0) },
+    { ...graphCommon, id: 'graph-rent', kind: 'envelope', name: 'Synthetic graph rent', mode: 'goal', frequency: 'once', target: 80000, state: 'active', priority: 1 },
+    { ...graphCommon, id: 'graph-goal', kind: 'envelope', name: 'Synthetic graph goal', mode: 'goal', frequency: 'once', target: 50000, state: 'active', priority: 2 },
+    { ...graphCommon, id: 'graph-add', kind: 'movement', createdAt: at(3), amount: 25000, from: null, to: 'graph-rent', status: 'confirmed' },
+    { ...graphCommon, id: 'graph-release', kind: 'movement', createdAt: at(4), amount: 5000, from: 'graph-rent', to: null, status: 'confirmed' },
+    { ...graphCommon, id: 'graph-transfer', kind: 'movement', createdAt: at(5), amount: 3000, from: 'graph-rent', to: 'graph-goal', status: 'confirmed' },
+    { ...graphCommon, id: 'graph-pending', kind: 'movement', createdAt: at(6), amount: 9000, from: null, to: 'graph-rent', status: 'pending' },
+  ]
+  const graphOps: Operation[] = [
+    { ...income, id: 'graph-income', date: at(1), amount: 50000 },
+    { ...expense, id: 'graph-expense', date: at(2), amount: 12000 },
+    { ...expense, id: 'graph-payment', date: at(7), amount: 10000, planningPayment: { envelopeId: 'graph-rent', reserved: 10000 } },
+  ]
+  const graph = (ops = graphOps, plans = graphPlans) => freeBalanceSeries(ops, plans, fixed, fixed)
+  const valueAt = (day: number, series = graph()) => series.points.find((p) => p.time === Date.parse(at(day)))?.value
+  check(valueAt(1) === 150000 && valueAt(2) === 138000, 'Free graph income/expense chronology wrong')
+  check(valueAt(3) === 113000 && valueAt(4) === 118000 && valueAt(5) === 118000, 'Free graph reserve/release/transfer wrong')
+  check(valueAt(7) === 118000 && graph().points.at(-1)?.value === 118000, 'Linked reserve expense charged free cash twice')
+  check(!graph().points.some((p) => p.time === Date.parse(at(6))), 'Pending reserve invented a graph movement')
+  check(freeBalanceSeries(graphOps, graphPlans, new Date(2026, 9, 1), fixed).points.at(-1)?.value === 100000, 'November reserve leaked into October graph')
+  check(!freeBalanceSeries(graphOps, graphPlans, new Date(2026, 11, 1), fixed).points.length, 'Future graph invented balances')
+  check(!graph(graphOps, graphPlans.filter((p) => p.kind !== 'balance')).points.length, 'Graph invented an unknown opening balance')
+  const editedGraphOps = graphOps.map((o) => o.id === 'graph-income' ? { ...o, amount: 60000 } : o)
+  check(graph(editedGraphOps).points.at(-1)?.value === 128000, 'Editing income did not rebuild graph')
+  const deletedGraphOps = graphOps.map((o) => o.id === 'graph-expense' ? { ...o, deletedAt: at(9) } : o)
+  check(graph(deletedGraphOps).points.at(-1)?.value === 130000, 'Deleting expense did not rebuild graph')
+  const changedPayment = graphOps.map((o) => o.id === 'graph-payment' ? { ...o, amount: 6000 } : o)
+  check(graph(changedPayment).points.at(-1)?.value === 118000, 'Editing linked payment double-counted reserve')
+  for (const operations of [graphOps, editedGraphOps, deletedGraphOps, changedPayment]) {
+    for (const plans of [graphPlans, [...graphPlans, { ...graphCommon, id: 'graph-correction', kind: 'balance' as const, amount: 90000, at: at(8) }]]) {
+      check(graph(operations, plans).points.at(-1)?.value === financials(operations, plans, fixed).free, 'Graph endpoint differs from actual free money')
+    }
+  }
+  const densePoints = Array.from({ length: 10000 }, (_, i) => ({ time: i, value: Math.round(Math.sin(i) * 1000) }))
+  const sampled = sampleBalancePoints(densePoints)
+  check(sampled.length <= 600 && sampled[0] === densePoints[0] && sampled.at(-1) === densePoints.at(-1) && sampled.every((p, i) => !i || p.time > sampled[i - 1].time), 'Graph sampling is unbounded or changes chronology')
+  check(Math.max(...sampled.map(p => p.value)) === 1000 && Math.min(...sampled.map(p => p.value)) === -1000, 'Sampling lost true extrema')
+  const lateAnchor: PlanningRecord = { ...graphCommon, id: 'late-opening', kind: 'balance', amount: 31000, at: at(10, 11) }
+  const lateReserve: PlanningRecord = { ...graphCommon, id: 'late-reserve', kind: 'movement', amount: 10000, from: null, to: 'graph-rent', status: 'confirmed', createdAt: at(10, 11), updatedAt: at(10, 11) }
+  const lateSeries = freeBalanceSeries([], [lateAnchor, graphPlans[1], lateReserve], fixed, fixed)
+  check(lateSeries.points[0].time === lateSeries.start && lateSeries.points[0].value === 31000 && lateSeries.points.at(-1)?.value === 21000, 'Late checkpoint failed to reconstruct full-period opening cash')
+  const lateWithFlows = freeBalanceSeries(graphOps, [lateAnchor, graphPlans[1], lateReserve], fixed, fixed)
+  check(lateWithFlows.points[0].value === 3000 && lateWithFlows.points.at(-1)?.value === financials(graphOps, [lateAnchor, graphPlans[1], lateReserve], fixed).free, 'Opening reconstruction changed final free cash or double-counted linked expenses')
+  for (const count of [0, 1, 2, 1000]) {
+    const operations = Array.from({ length: count }, (_, i) => ({ ...graphOps[i % 2], id: 'sparse-' + i, date: new Date(Date.parse(at(10, 11)) + i).toISOString() }))
+    const series = freeBalanceSeries(operations, [lateAnchor], fixed, fixed)
+    const coordinates = balanceChartPoints(series)
+    check(coordinates[0][0] === 0 && coordinates.at(-1)![0] === 300, 'Sparse/dense chart does not fill its width')
+    check(coordinates.every(([x,y],i) => Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 300 && y > 0 && y < 64 && (!i || x > coordinates[i-1][0])), 'Chart has vertical/invalid/out-of-bounds coordinates')
+    if (count <= 2) check(coordinates.every((p,i) => !i || p[0] - coordinates[i-1][0] >= 40), 'Sparse chart clustered events at the right edge')
+    check(series.points.at(-1)?.value === financials(operations, [lateAnchor], fixed).free, 'Chart layout changed financial endpoint')
+  }
+  const previousFromLate = freeBalanceSeries(graphOps, [lateAnchor, graphPlans[1], lateReserve], new Date(2026,9,1), fixed)
+  check(previousFromLate.points[0].time === previousFromLate.start && previousFromLate.points.at(-1)?.value === 3000, 'Past month cannot reconstruct opening cash from later checkpoint')
+  console.log('PASS full-width 0/1/2/1000-operation graph, late-checkpoint reconstruction, carry-forward, finite bounds and separated event coordinates')
+
+  console.log('PASS chronological free-money graph: income/expense edits/deletions, confirmed reserves, releases/transfers, linked payments, checkpoints, month boundaries and bounded 10000-point rendering')
+
   const initial = JSON.stringify(await DB.backupSnapshot())
   const originalPut = IDBObjectStore.prototype.put
   let failNext = true
@@ -434,6 +498,41 @@ export async function runAppRegression() {
   actions.savePlanning({ ...release, status: 'confirmed' }); await waitForWrites()
   check(financials(getState().operations, getState().planning).reserves[simple.id] === 0 && !document.querySelector('main')!.textContent!.includes('Synthetic simple plan'), 'Closed empty plan did not move to archive')
   console.log('PASS inline plan expansion without keyboard/modal, preview, insufficient funds, duplicate-tap guard, automatic collapse, reserve reduction, independent metadata edit and safe archive')
+
+  await click('Главная', document.querySelector('nav')!)
+  const displayed = (label: string) => document.querySelector(`[aria-label="${label}"]`)!.textContent!.replace(/\s/g, '').replace('−', '-')
+  const formatted = (cents: number) => fmt(cents).replace(/\s/g, '')
+  const checkHome = (period = new Date()) => {
+    const money = financials(getState().operations, getState().planning)
+    const monthlyNet = totals(byPeriod(getState().operations, 'month', period)).net
+    check(displayed('Свободные деньги') === formatted(money.free!), 'Hero does not show current confirmed free money')
+    check(displayed('Подтверждённый резерв') === formatted(money.reserved), 'Home reserve includes unconfirmed requests')
+    check(displayed('Итог месяца') === formatted(monthlyNet), 'Month result subtracts reserve or uses the wrong month')
+    check(document.querySelector('main')!.textContent!.includes('Итог за ' + monthName(period)), 'Selected month label incorrect')
+  }
+  checkHome()
+  const beforeHomeReserve = financials(getState().operations, getState().planning).free!
+  const homeReserve = await savePlan({ kind: 'movement', amount: 10000, from: null, to: recurring.id, status: 'pending' })
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve, 'Pending reserve reduced free cash')
+  actions.savePlanning({ ...homeReserve, status: 'confirmed' }); await waitForWrites(); await wait()
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve - 10000, 'Confirmed reserve not deducted exactly once')
+  const homeRelease = await savePlan({ kind: 'movement', amount: 4000, from: recurring.id, to: null, status: 'pending' })
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve - 10000, 'Pending release increased free cash')
+  actions.savePlanning({ ...homeRelease, status: 'confirmed' }); await waitForWrites(); await wait()
+  checkHome(); check(financials(getState().operations, getState().planning).free === beforeHomeReserve - 6000, 'Reserve reduction did not release correct cash')
+  actions.addOperation(draft('Synthetic home income', 5000, 'income'))
+  actions.addOperation(draft('Synthetic home expense', 1200))
+  const previousMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 15, 12)
+  actions.addOperation({ ...draft('Synthetic previous month income', 8765, 'income'), date: previousMonth.toISOString() })
+  await waitForWrites(); await wait(); checkHome()
+  const currentFree = displayed('Свободные деньги')
+  await click('Предыдущий месяц'); checkHome(previousMonth)
+  check(displayed('Свободные деньги') === currentFree, 'Month selection changed current available cash')
+  await click('Следующий месяц'); checkHome()
+  await click('Настроить баланс'); await click('Настройки планирования'); await click('Настроить баланс')
+  check(!!document.querySelector('input[aria-label="Фактический баланс"]'), 'Initial balance settings inaccessible from Home')
+  await click('Отмена'); await click('Главная', document.querySelector('nav')!)
+  console.log('PASS Home current free cash, confirmed/pending reserve and release, monthly net without double deduction, month switching and balance settings')
 
   let updateChecks = 0
   watchUpdates({ update: async () => { updateChecks++ } } as unknown as ServiceWorkerRegistration)
