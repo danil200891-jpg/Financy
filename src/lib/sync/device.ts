@@ -4,7 +4,9 @@
 import * as DB from '../db'
 import { sha256 } from './canonical'
 
-export const SYNC_PORT = 47821
+// Always 47821 in the app. The regression test compiles in a free port so it never touches a
+// Financy Sync that is installed and running on the same PC.
+export const SYNC_PORT = Number(import.meta.env.VITE_SYNC_TEST_PORT) || 47821
 export const CA_PORT = 47820
 
 export interface PairedDevice {

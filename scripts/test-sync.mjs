@@ -12,9 +12,11 @@ const chrome = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Applica
 if (!chrome) throw new Error('Set CHROME_PATH to a Chrome or Chromium executable')
 mkdirSync('node_modules/.cache', { recursive: true })
 const work = mkdtempSync(resolve('node_modules/.cache/sync-regression-'))
+// a free port, not 47821: an installed Financy Sync on this PC must stay untouched
+const syncPort = await new Promise((r) => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
 await build({
   configFile: false, logLevel: 'error',
-  define: { 'process.env.NODE_ENV': JSON.stringify('production'), __APP_VERSION__: JSON.stringify('sync-regression') },
+  define: { 'process.env.NODE_ENV': JSON.stringify('production'), __APP_VERSION__: JSON.stringify('sync-regression'), 'import.meta.env.VITE_SYNC_TEST_PORT': JSON.stringify(String(syncPort)) },
   build: { outDir: join(work, 'bundle'), lib: { entry: resolve('scripts/sync-regression.ts'), formats: ['es'], fileName: () => 'test.js' } },
 })
 const bundle = readFileSync(join(work, 'bundle', 'test.js'))
@@ -26,7 +28,7 @@ await new Promise((r) => web.listen(0, '127.0.0.1', r))
 const webPort = web.address().port
 
 const home = join(work, 'server-home')
-const startSync = () => startServer({ home, quiet: true, noExit: true, bindHost: '127.0.0.1', port: 47821, httpPort: 0, adminPort: 0, hosts: ['localhost'], config: { backupDir: join(home, 'backups') } })
+const startSync = () => startServer({ home, quiet: true, noExit: true, bindHost: '127.0.0.1', port: syncPort, httpPort: 0, adminPort: 0, hosts: ['localhost'], config: { backupDir: join(home, 'backups') } })
 let server = await startSync()
 const admin = (method, path) => new Promise((res, rej) => {
   const r = request({ host: '127.0.0.1', port: server.ports.admin, method, path, headers: { 'X-Financy-Admin': '1' } }, (x) => { let t = ''; x.on('data', (c) => (t += c)); x.on('end', () => res(JSON.parse(t))) })

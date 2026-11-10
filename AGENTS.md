@@ -11,7 +11,7 @@ UI language: **Russian**. Code, comments and commit messages: English.
 | Dev server | `npm run dev` |
 | Type-check | `npx tsc -b` |
 | Production build | `npm run build` (copies OCR assets first via `prebuild`) |
-| Build for a GitHub Pages subpath | `BASE_PATH=/<repo>/ npm run build` |
+| Build for a GitHub Pages subpath | `BASE_PATH=/<repo>/ npm run build` (Git Bash on Windows: prefix `MSYS_NO_PATHCONV=1`, otherwise the path is rewritten) |
 | Test on iPhone over Wi-Fi | `npm run cert` once, then `npm run iphone` (see README) |
 
 Always run `npx tsc -b` and `npm run build` before finishing a change.
