@@ -39,3 +39,12 @@ Always run `npx tsc -b` and `npm run build` before finishing a change.
 6. **Paths.** The app is served from a subpath on GitHub Pages. Use `import.meta.env.BASE_URL` (or `%BASE_URL%` in `index.html`) — never hard-code `/...` URLs.
 7. **Updates.** Service worker uses `registerType: 'prompt'`: a new version is offered with an «Обновить» toast; do not switch to auto-reload.
 8. Do not publish, push or create remote repositories without the user's explicit permission.
+9. **No external network origins.** Production builds ship a Content-Security-Policy (`vite.config.ts`, `connect-src 'self'`). Never add CDNs, fonts, analytics or APIs from other domains; bundle dependencies locally instead.
+
+## Working together (Claude Code + ChatGPT Codex on one repo)
+
+- After cloning: `npm ci` — this also enables the pre-commit guard (`.githooks/pre-commit`) that blocks keys, certificates, Finance backups and CSV exports from being committed under any file name.
+- One task = one branch (`feature/…`, `fix/…`) off `main`; open a pull request, never force-push `main`. Pull/rebase before starting so two agents don't edit stale code.
+- Small focused commits with English messages; run `npm run check && npm run build` before each commit.
+- Line endings are LF everywhere (`.gitattributes`, `.editorconfig`) so Windows and Linux agents produce clean diffs.
+- Pushing to `main` deploys to GitHub Pages (`.github/workflows/deploy.yml`) — merge only tested changes.
