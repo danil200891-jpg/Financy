@@ -59,7 +59,7 @@ export default defineConfig(({ mode }) => ({
       // 'prompt': a new version waits until the user taps «Обновить» — never reloads mid-entry.
       // Updating only swaps app files; IndexedDB data is untouched.
       registerType: 'prompt',
-      includeAssets: ['icon.svg', 'apple-touch-icon.png'],
+      includeAssets: ['favicon-cbbb563605.png', 'apple-touch-icon-cbbb563605.png'],
       manifest: {
         name: 'Finance',
         short_name: 'Finance',
@@ -72,9 +72,8 @@ export default defineConfig(({ mode }) => ({
         start_url: '.',
         scope: '.',
         icons: [
-          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'icon-192-cbbb563605.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icon-512-cbbb563605.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
         ],
       },
       workbox: {
