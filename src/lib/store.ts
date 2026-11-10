@@ -287,6 +287,42 @@ export const actions = {
     setAll({ operations: [], clients: [], categories: cats })
   },
 
+  /**
+   * Records received from the PC sync server. Stored exactly as received (updatedAt is NOT bumped,
+   * so they do not bounce back as new changes); each lands in the history store marked `via: 'sync'`.
+   * `stillValid` is re-checked synchronously right before writing, so a local edit made meanwhile wins.
+   */
+  applyRemote(items: { entity: EntityKind; data: Operation | Client | Category }[], stillValid: (entity: EntityKind, data: Operation | Client | Category, current: Operation | Client | Category | undefined) => boolean = () => true) {
+    const puts: Put[] = []
+    const history: HistoryEntry[] = []
+    for (const { entity, data } of items) {
+      const store = STORE[entity]
+      const before = (state.all[store] as (Operation | Client | Category)[]).find((r) => r.id === data.id)
+      if (!stillValid(entity, data, before)) continue
+      const action: HistoryAction = !before ? 'create' : data.deletedAt && !before.deletedAt ? 'delete' : !data.deletedAt && before.deletedAt ? 'restore' : 'update'
+      puts.push({ store, value: data })
+      history.push({ ...hist(entity, data.id, action, before, data), via: 'sync' })
+    }
+    if (puts.length) writeBatch(puts, history)
+    return puts.length
+  },
+
+  /** Writes whole records as new local edits in one transaction (restore a backup, pick a conflict version). */
+  putAsEdits(items: { entity: EntityKind; data: Operation | Client | Category; action?: HistoryAction }[]) {
+    const t = nowIso()
+    const puts: Put[] = []
+    const history: HistoryEntry[] = []
+    for (const { entity, data, action = 'update' } of items) {
+      const store = STORE[entity]
+      const before = (state.all[store] as (Operation | Client | Category)[]).find((r) => r.id === data.id)
+      const after = { ...data, updatedAt: t }
+      puts.push({ store, value: after })
+      history.push(hist(entity, data.id, before ? action : 'create', before, after))
+    }
+    if (puts.length) writeBatch(puts, history)
+    return puts.length
+  },
+
   /** Used by backup restore after the DB was rewritten. */
   async reload() {
     const data = await DB.loadAll()

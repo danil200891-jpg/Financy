@@ -28,7 +28,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://accounts.google.com/gsi/ https://apis.google.com/",
   "worker-src 'self' blob:",
-  "connect-src 'self' blob: data: https://accounts.google.com/gsi/ https://www.googleapis.com/drive/ https://www.googleapis.com/upload/drive/",
+  "connect-src 'self' blob: data: https://*:47821 https://accounts.google.com/gsi/ https://www.googleapis.com/drive/ https://www.googleapis.com/upload/drive/",
   "frame-src https://accounts.google.com/gsi/ https://docs.google.com/picker",
   "img-src 'self' data: blob:",
   "media-src 'self' blob: mediastream:",

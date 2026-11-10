@@ -9,6 +9,7 @@ import { dayLabel, fmt, plural } from '../lib/format'
 import type { OpType } from '../lib/types'
 import { Card, CategoryIcon, ChevronLeft, ICONS, IconButton, PrimaryButton, Segmented, Sheet } from '../components/ui'
 import { GoogleDriveBackup } from '../components/GoogleDriveBackup'
+import { SyncSection } from '../components/SyncSection'
 import { finishDriveRestore, completeDriveRestore } from '../lib/drive-backup'
 
 const PALETTE = ['#3fe0c5', '#7c8cff', '#9f6bff', '#ffc56b', '#ff9f6b', '#ff6b81', '#6bc5ff', '#5ee08a', '#ff7ad9']
@@ -261,6 +262,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
               </Card>
             </section>
           ))}
+
+          <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />
 
           <GoogleDriveBackup onRestore={(backup) => { setFromDrive(true); setPending(backup) }} />
 

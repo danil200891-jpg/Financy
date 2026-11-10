@@ -144,6 +144,14 @@ export async function setMeta(key: string, value: unknown) {
   await (await db()).put('meta', value, key)
 }
 
+export async function getMeta<T>(key: string) {
+  return (await (await db()).get('meta', key)) as T | undefined
+}
+
+export async function deleteMeta(key: string) {
+  await (await db()).delete('meta', key)
+}
+
 export async function historyFor(entityId: string) {
   const list = await (await db()).getAllFromIndex('history', 'entityId', entityId)
   return list.sort((a, b) => b.at.localeCompare(a.at))

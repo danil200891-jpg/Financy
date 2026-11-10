@@ -6,6 +6,7 @@ import { actions, initStore, waitForWrites } from './lib/store'
 import { toast } from './lib/toast'
 import { initDriveBackup } from './lib/drive-backup'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
+import { initSync } from './lib/sync'
 
 type Boot = { stage: (s: string) => void; done: () => void; fail: (title: string, err: unknown) => void }
 const boot = (window as unknown as { __boot?: Boot }).__boot
@@ -61,6 +62,7 @@ Promise.race([
     document.addEventListener('visibilitychange', refreshData)
     setInterval(() => { if (calendarDay !== new Date().toDateString()) refreshData() }, 60000)
     void initDriveBackup().catch(() => {})
+    void initSync().catch((e) => console.warn('sync unavailable', e))
     boot?.stage('rendering')
     root.render(
       <StrictMode>

@@ -1,6 +1,9 @@
 import type { Category, Client, HistoryEntry, Operation } from './types'
 import * as DB from './db'
 import { actions, fingerprint, getState, waitForWrites } from './store'
+import type { EntityKind } from './types'
+import { canonical } from './sync/canonical'
+import { isPaired } from './sync'
 
 export const BACKUP_APP = 'finance-pwa'
 export const BACKUP_VERSION = 1
@@ -101,6 +104,12 @@ export async function getPreRestore() {
 export async function undoRestore() {
   const b = await getPreRestore()
   if (!b) return false
+  if (isPaired()) {
+    // with a PC connected the undo must travel as normal edits, otherwise the next sync would bring the restored state back
+    await applyAsEdits(b, true)
+    await (await DB.db()).delete('meta', 'preRestore')
+    return true
+  }
   await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history })
   await (await DB.db()).delete('meta', 'preRestore')
   await actions.reload()
@@ -164,6 +173,11 @@ const newer = <T extends { updatedAt?: string }>(a: T, b?: T) => !b || (a.update
 /** Merge: by id, newer updatedAt wins; records with a new id but the same fingerprint are skipped as duplicates. */
 export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<RestoreSummary> {
   await waitForWrites()
+  if (mode === 'replace' && isPaired()) {
+    await DB.setMeta('preRestore', await buildBackup())
+    const r = await applyAsEdits(b, true)
+    return { added: r.restored, updated: r.changed, skippedDuplicates: 0, clients: b.clients.filter((c) => !c.deletedAt).length, categories: b.categories.filter((c) => !c.deletedAt).length }
+  }
   if (mode === 'replace') {
     await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history }, { app: BACKUP_APP, version: BACKUP_VERSION, exportedAt: new Date().toISOString() })
     await actions.reload()
@@ -207,4 +221,60 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
   ], b.history)
   await actions.reload()
   return sum
+}
+
+/* ---------------- restore as edits (sync-safe) ---------------- */
+
+const LIST: [EntityKind, 'operations' | 'clients' | 'categories'][] = [['operation', 'operations'], ['client', 'clients'], ['category', 'categories']]
+const content = (r: object) => canonical({ ...r, updatedAt: undefined })
+
+export interface RestorePlan {
+  /** missing on this device or deleted here — will come back */
+  restored: number
+  /** exist here with different content — will return to the backup's version */
+  changed: number
+  unchanged: number
+  /** added after the backup — kept (or, for undo/replace, moved to «Недавно удалённые») */
+  newer: number
+  items: { entity: EntityKind; data: Operation | Client | Category; action: 'update' | 'restore' | 'delete' }[]
+}
+
+/** What restoring `b` would do. Nothing is written. */
+export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categories'>, removeExtra = false): RestorePlan {
+  const { all } = getState()
+  const plan: RestorePlan = { restored: 0, changed: 0, unchanged: 0, newer: 0, items: [] }
+  for (const [entity, list] of LIST) {
+    const local = new Map<string, Operation | Client | Category>(all[list].map((r) => [r.id, r]))
+    const inBackup = new Set<string>()
+    for (const r of b[list] as (Operation | Client | Category)[]) {
+      inBackup.add(r.id)
+      const cur = local.get(r.id)
+      if (cur && content(cur) === content(r)) { plan.unchanged++; continue }
+      const back = !cur || (!!cur.deletedAt && !r.deletedAt)
+      if (back) plan.restored++; else plan.changed++
+      plan.items.push({ entity, data: r, action: back && cur ? 'restore' : 'update' })
+    }
+    for (const cur of all[list]) {
+      if (inBackup.has(cur.id) || cur.deletedAt) continue
+      plan.newer++
+      if (removeExtra) plan.items.push({ entity, data: { ...cur, deletedAt: new Date().toISOString() }, action: 'delete' })
+    }
+  }
+  return plan
+}
+
+/** Writes the plan as ordinary edits: history is kept, nothing is hard-deleted, the PC receives it on the next sync. */
+export async function applyAsEdits(b: Pick<Backup, 'operations' | 'clients' | 'categories'>, removeExtra = false) {
+  await waitForWrites()
+  const plan = planRestore(b, removeExtra)
+  actions.putAsEdits(plan.items)
+  await waitForWrites()
+  return plan
+}
+
+/** Restore from a PC backup: local safety snapshot first, then the backup is applied as edits; newer records are kept. */
+export async function restoreFromBackup(b: Backup) {
+  await waitForWrites()
+  await DB.setMeta('preRestore', await buildBackup())
+  return applyAsEdits(b, false)
 }

@@ -19,7 +19,8 @@
     "test:drive": "node scripts/test-drive-backup.mjs",
     "prepare": "git config core.hooksPath .githooks || true",
     "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs",
-    "sync-server": "node sync-server/server.mjs"
+    "sync-server": "node sync-server/server.mjs",
+    "test:sync": "node scripts/test-sync.mjs"
   },
   "dependencies": {
     "@fontsource-variable/onest": "^5.3.1",
