@@ -13,7 +13,7 @@ import { parseRecognized } from '../src/lib/receipt'
 import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
-import { freeBalanceSeries, sampleBalancePoints } from '../src/lib/free-balance-series'
+import { freeBalanceSeries, sampleBalancePoints, balanceChartPoints } from '../src/lib/free-balance-series'
 import type { PlanningRecord } from '../src/lib/planning-types'
 import { smoothSegments, smoothPath } from '../src/lib/sparkline'
 import { incomeSources } from '../src/lib/income-sources'
@@ -145,6 +145,25 @@ export async function runAppRegression() {
   const sampled = sampleBalancePoints(densePoints)
   check(sampled.length <= 600 && sampled[0] === densePoints[0] && sampled.at(-1) === densePoints.at(-1) && sampled.every((p, i) => !i || p.time > sampled[i - 1].time), 'Graph sampling is unbounded or changes chronology')
   check(Math.max(...sampled.map(p => p.value)) === 1000 && Math.min(...sampled.map(p => p.value)) === -1000, 'Sampling lost true extrema')
+  const lateAnchor: PlanningRecord = { ...graphCommon, id: 'late-opening', kind: 'balance', amount: 31000, at: at(10, 11) }
+  const lateReserve: PlanningRecord = { ...graphCommon, id: 'late-reserve', kind: 'movement', amount: 10000, from: null, to: 'graph-rent', status: 'confirmed', createdAt: at(10, 11), updatedAt: at(10, 11) }
+  const lateSeries = freeBalanceSeries([], [lateAnchor, graphPlans[1], lateReserve], fixed, fixed)
+  check(lateSeries.points[0].time === lateSeries.start && lateSeries.points[0].value === 31000 && lateSeries.points.at(-1)?.value === 21000, 'Late checkpoint failed to reconstruct full-period opening cash')
+  const lateWithFlows = freeBalanceSeries(graphOps, [lateAnchor, graphPlans[1], lateReserve], fixed, fixed)
+  check(lateWithFlows.points[0].value === 3000 && lateWithFlows.points.at(-1)?.value === financials(graphOps, [lateAnchor, graphPlans[1], lateReserve], fixed).free, 'Opening reconstruction changed final free cash or double-counted linked expenses')
+  for (const count of [0, 1, 2, 1000]) {
+    const operations = Array.from({ length: count }, (_, i) => ({ ...graphOps[i % 2], id: 'sparse-' + i, date: new Date(Date.parse(at(10, 11)) + i).toISOString() }))
+    const series = freeBalanceSeries(operations, [lateAnchor], fixed, fixed)
+    const coordinates = balanceChartPoints(series)
+    check(coordinates[0][0] === 0 && coordinates.at(-1)![0] === 300, 'Sparse/dense chart does not fill its width')
+    check(coordinates.every(([x,y],i) => Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 300 && y > 0 && y < 64 && (!i || x > coordinates[i-1][0])), 'Chart has vertical/invalid/out-of-bounds coordinates')
+    if (count <= 2) check(coordinates.every((p,i) => !i || p[0] - coordinates[i-1][0] >= 40), 'Sparse chart clustered events at the right edge')
+    check(series.points.at(-1)?.value === financials(operations, [lateAnchor], fixed).free, 'Chart layout changed financial endpoint')
+  }
+  const previousFromLate = freeBalanceSeries(graphOps, [lateAnchor, graphPlans[1], lateReserve], new Date(2026,9,1), fixed)
+  check(previousFromLate.points[0].time === previousFromLate.start && previousFromLate.points.at(-1)?.value === 3000, 'Past month cannot reconstruct opening cash from later checkpoint')
+  console.log('PASS full-width 0/1/2/1000-operation graph, late-checkpoint reconstruction, carry-forward, finite bounds and separated event coordinates')
+
   console.log('PASS chronological free-money graph: income/expense edits/deletions, confirmed reserves, releases/transfers, linked payments, checkpoints, month boundaries and bounded 10000-point rendering')
 
   const initial = JSON.stringify(await DB.backupSnapshot())

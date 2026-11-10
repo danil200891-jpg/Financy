@@ -5,7 +5,7 @@ import { isEuro } from './format'
 export interface BalancePoint { time: number; value: number }
 export interface FreeBalanceSeries { start: number; end: number; points: BalancePoint[] }
 
-/** Replays current records, in local calendar time, without writing or inventing an opening balance. */
+/** Replays current records, in local calendar time, without writing; reconstructs opening cash from a known checkpoint and recorded flows. */
 export function freeBalanceSeries(operations: Operation[], planning: PlanningRecord[], period: Date, now = new Date()): FreeBalanceSeries {
   const start = +new Date(period.getFullYear(), period.getMonth(), 1)
   const end = Math.min(+new Date(period.getFullYear(), period.getMonth() + 1, 1) - 1, +now)
@@ -14,7 +14,7 @@ export function freeBalanceSeries(operations: Operation[], planning: PlanningRec
   const events: Event[] = []
   for (const operation of operations) {
     const time = Date.parse(operation.date)
-    if (operation.deletedAt || !isEuro(operation) || time > end) continue
+    if (operation.deletedAt || !isEuro(operation) || !Number.isFinite(time) || time > end) continue
     const payment = operation.type === 'expense' ? operation.planningPayment : undefined
     events.push({ time, order: 0, id: operation.id, cash: operation.type === 'income' ? operation.amount : -operation.amount,
       reserve: payment ? [[payment.envelopeId, -Math.min(operation.amount, payment.reserved)]] : [] })
@@ -31,6 +31,16 @@ export function freeBalanceSeries(operations: Operation[], planning: PlanningRec
         ...(record.to ? [[record.to, record.amount!] as [string, number]] : []),
       ] })
     }
+  }
+  const firstAnchor = planning.filter((r) => !r.deletedAt && r.kind === 'balance' && Date.parse(r.at!) <= +now)
+    .sort((a, b) => Date.parse(a.at!) - Date.parse(b.at!) || Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))[0]
+  if (firstAnchor && Date.parse(firstAnchor.at!) > start) {
+    // Rewind recorded cash flows from the first observed checkpoint. This is a
+    // derived chart sample only, never a new balance record or financial operation.
+    const anchorTime = Date.parse(firstAnchor.at!)
+    const cashSinceStart = operations.filter((o) => !o.deletedAt && isEuro(o) && Date.parse(o.date) >= start && Date.parse(o.date) <= anchorTime)
+      .reduce((sum, o) => sum + (o.type === 'income' ? o.amount : -o.amount), 0)
+    events.push({ time: start, order: -1, id: '', balance: firstAnchor.amount! - cashSinceStart })
   }
   // Daily carry-forward points keep inactive days flat, including across DST changes.
   for (const day = new Date(start); +day <= end; day.setDate(day.getDate() + 1)) events.push({ time: +day, order: 3, id: '' })
@@ -70,4 +80,19 @@ export function sampleBalancePoints(points: BalancePoint[], limit = 600): Balanc
   const indices = new Set([0, points.length - 1])
   groups.forEach(({ min, max }) => { indices.add(min); indices.add(max) })
   return [...indices].sort((a, b) => a - b).map((index) => points[index])
+}
+
+/** The compact sparkline has an event-order axis, not a labelled linear-time axis.
+ * Preserve flat runs' ends, then give close events readable horizontal separation.
+ * Timestamps/amounts remain untouched; no extra financial fluctuations are created.
+ */
+export function balanceChartPoints(series: FreeBalanceSeries, width = 300, height = 64): [number, number][] {
+  const reduced = series.points.filter((p, i, all) => i === 0 || i === all.length - 1 || p.value !== all[i - 1].value || p.value !== all[i + 1].value)
+  const samples = sampleBalancePoints(reduced)
+  if (!samples.length) return []
+  const values = samples.map((p) => p.value), low = Math.min(...values), high = Math.max(...values)
+  if (samples.length === 1) return [[0, height / 2], [width, height / 2]]
+  // Leave room for both the glow and spline inside the SVG viewport.
+  return samples.map((point, i) => [i / (samples.length - 1) * width,
+    high === low ? height / 2 : height * .82 - (point.value - low) / (high - low) * height * .64])
 }
