@@ -156,6 +156,8 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
 
   const { all } = getState()
   const opById = new Map(all.operations.map((o) => [o.id, o]))
+  // Only compare with records already on this device. Distinct IDs in one backup
+  // may represent intentional identical payments and must survive the transfer.
   const fps = new Set(all.operations.filter((o) => !o.deletedAt).map(fingerprint))
   const sum: RestoreSummary = { added: 0, updated: 0, skippedDuplicates: 0, clients: 0, categories: 0 }
   const ops: Operation[] = []
@@ -167,7 +169,6 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
       sum.skippedDuplicates++
     } else {
       ops.push(o)
-      fps.add(fingerprint(o))
       sum.added++
     }
   }
