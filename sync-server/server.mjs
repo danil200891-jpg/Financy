@@ -38,12 +38,14 @@ export async function startServer(opts = {}) {
   }
 
   const cfgPath = join(home, 'config.json')
-  const config = loadJson(cfgPath, () => ({
+  // defaults fill anything missing (the installer writes only paths); a saved serverId is kept
+  const config = {
     serverId: `srv-${randomBytes(9).toString('base64url')}`,
     serverName: hostname(),
     backupDir: process.env.FINANCY_BACKUP_DIR || (process.platform === 'win32' ? 'D:\\Financy-Backups' : join(home, 'backups')),
     port: 47821, httpPort: 47820, adminPort: 47822,
-  }), log)
+    ...loadJson(cfgPath, () => ({}), log),
+  }
   Object.assign(config, opts.config ?? {})
   saveJson(cfgPath, config)
 
@@ -262,7 +264,8 @@ export async function startServer(opts = {}) {
     server.once('error', reject)
     server.listen(port, host, () => { server.off('error', reject); resolve(server.address().port) })
   })
-  const bindHost = opts.bindHost ?? '0.0.0.0'
+  // FINANCY_BIND_HOST=127.0.0.1 keeps a test run off the LAN (no firewall prompt)
+  const bindHost = opts.bindHost ?? process.env.FINANCY_BIND_HOST ?? '0.0.0.0'
   const ports = {
     sync: await listen(https, opts.port ?? config.port, bindHost),
     ca: await listen(http, opts.httpPort ?? config.httpPort, bindHost),

@@ -6,7 +6,8 @@
 #   4. OPTIONAL, only if you answer «Y»: a Windows Firewall rule for ports 47820-47821, private networks only
 #   5. starts the server and opens its page
 # Nothing is deleted. Existing data and backups are kept.
-param([string]$BackupDir = 'D:\Financy-Backups', [switch]$NoFirewall, [switch]$NoStart)
+# -NoAutostart (for checks): no start-up entry and no browser window
+param([string]$BackupDir = 'D:\Financy-Backups', [switch]$NoFirewall, [switch]$NoStart, [switch]$NoAutostart)
 $ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
 $home2 = Join-Path $env:LOCALAPPDATA 'Financy-Sync'
@@ -18,12 +19,22 @@ Say "`nFinancy Sync — установка`n" Cyan
 # 1. Node.js
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { Say 'Не найден Node.js. Установите Node.js 22 или новее с https://nodejs.org и запустите установку снова.' Red; exit 1 }
-$ver = [int]((& $node -p 'process.versions.node.split(".")[0]'))
+# parse "v24.1.0" ourselves: Windows PowerShell 5.1 strips quotes from native arguments
+$ver = 0
+if ((& $node --version) -match '^v(\d+)\.') { $ver = [int]$Matches[1] }
 if ($ver -lt 22) { Say "Нужен Node.js 22 или новее (сейчас $ver)." Red; exit 1 }
 
 # openssl (ships with Git for Windows)
 $openssl = $null
-foreach ($c in @((Get-Command openssl -ErrorAction SilentlyContinue).Source, 'C:\Program Files\Git\usr\bin\openssl.exe', 'C:\Program Files\Git\mingw64\bin\openssl.exe')) {
+$candidates = @((Get-Command openssl -ErrorAction SilentlyContinue).Source)
+# Git may live anywhere (e.g. D:\Tools\Git): derive <Git>\usr\bin\openssl.exe from git.exe
+$git = (Get-Command git -ErrorAction SilentlyContinue).Source
+if ($git) {
+  $gitRoot = Split-Path (Split-Path $git -Parent) -Parent
+  $candidates += @((Join-Path $gitRoot 'usr\bin\openssl.exe'), (Join-Path $gitRoot 'mingw64\bin\openssl.exe'))
+}
+$candidates += @("$env:ProgramFiles\Git\usr\bin\openssl.exe", "$env:ProgramFiles\Git\mingw64\bin\openssl.exe", "$env:LOCALAPPDATA\Programs\Git\usr\bin\openssl.exe")
+foreach ($c in $candidates) {
   if ($c -and (Test-Path $c)) { $openssl = $c; break }
 }
 if (-not $openssl) { Say 'Не найден openssl. Установите Git for Windows (https://git-scm.com) и запустите установку снова.' Red; exit 1 }
@@ -52,14 +63,8 @@ Say "Папка резервных копий: $BackupDir" Green
 
 # server config: keep existing serverId and devices, only set paths
 $cfgPath = Join-Path $home2 'config.json'
-& $node -e "
-const f=require('fs'),c=require('crypto'),p=process.argv[1];
-const canon=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canon).join(',')+']':'{'+Object.keys(v).filter(k=>v[k]!==undefined).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';
-let cfg={};try{cfg=JSON.parse(f.readFileSync(p,'utf8')).payload||{}}catch{}
-cfg.backupDir=process.argv[2];cfg.openssl=process.argv[3];
-if(f.existsSync(p))f.copyFileSync(p,p+'.prev');
-f.writeFileSync(p,JSON.stringify({sha256:c.createHash('sha256').update(canon(cfg)).digest('hex'),payload:cfg}));
-" $cfgPath $BackupDir $openssl
+& $node (Join-Path $app 'write-config.mjs') $cfgPath $BackupDir $openssl
+if ($LASTEXITCODE -ne 0) { Say "Не удалось записать настройки $cfgPath" Red; exit 1 }
 
 # 4. start-up entry (current user only)
 $vbs = Join-Path $app 'start-hidden.vbs'
@@ -67,10 +72,12 @@ $vbs = Join-Path $app 'start-hidden.vbs'
 Set sh = CreateObject("WScript.Shell")
 sh.Run """$node"" ""$app\supervisor.mjs""", 0, False
 "@ | Set-Content -Encoding ASCII $vbs
-$startup = [Environment]::GetFolderPath('Startup')
-$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startup 'Financy Sync.lnk'))
-$lnk.TargetPath = 'wscript.exe'; $lnk.Arguments = "`"$vbs`""; $lnk.WorkingDirectory = $app; $lnk.Description = 'Financy Sync'; $lnk.Save()
-Say 'Автозапуск при входе в Windows включён.' Green
+if (-not $NoAutostart) {
+  $startup = [Environment]::GetFolderPath('Startup')
+  $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startup 'Financy Sync.lnk'))
+  $lnk.TargetPath = 'wscript.exe'; $lnk.Arguments = "`"$vbs`""; $lnk.WorkingDirectory = $app; $lnk.Description = 'Financy Sync'; $lnk.Save()
+  Say 'Автозапуск при входе в Windows включён.' Green
+}
 
 # 5. firewall (optional, needs administrator approval)
 if (-not $NoFirewall) {
@@ -98,6 +105,6 @@ if (-not $NoStart) {
   Start-Process wscript.exe -ArgumentList "`"$vbs`""
   $ok = $false
   for ($i = 0; $i -lt 30 -and -not $ok; $i++) { Start-Sleep -Milliseconds 500; try { Invoke-RestMethod 'http://127.0.0.1:47822/api/status' -Headers @{ 'X-Financy-Admin' = '1' } -TimeoutSec 2 | Out-Null; $ok = $true } catch { } }
-  if ($ok) { Say "`nГотово. Открываю страницу сервера…" Cyan; Start-Process 'http://127.0.0.1:47822/' }
+  if ($ok) { Say "`nГотово. Страница сервера: http://127.0.0.1:47822/" Cyan; if (-not $NoAutostart) { Start-Process 'http://127.0.0.1:47822/' } }
   else { Say "Сервер не ответил. Журнал: $home2\logs\server.log" Red; exit 1 }
 }

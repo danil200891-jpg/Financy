@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { X509Certificate, createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, networkInterfaces } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const PRIVATE = [/^192\.168\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./]
 
@@ -16,10 +16,20 @@ export function lanAddresses() {
     .map((i) => i.address)
 }
 
+// openssl.exe next to a Git for Windows installed in a non-default folder (found via git.exe on PATH)
+function gitOpenssl() {
+  if (process.platform !== 'win32') return []
+  try {
+    const git = execFileSync('where.exe', ['git'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).split(/\r?\n/)[0].trim()
+    const root = dirname(dirname(git))
+    return [join(root, 'usr', 'bin', 'openssl.exe'), join(root, 'mingw64', 'bin', 'openssl.exe')]
+  } catch { return [] }
+}
+
 export const localName = () => `${hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-')}.local`
 
 export function findOpenssl(configured) {
-  const candidates = [configured, process.env.FINANCY_OPENSSL, 'openssl',
+  const candidates = [configured, process.env.FINANCY_OPENSSL, 'openssl', ...gitOpenssl(),
     'C:/Program Files/Git/usr/bin/openssl.exe', 'C:/Program Files/Git/mingw64/bin/openssl.exe', 'C:/Program Files/OpenSSL-Win64/bin/openssl.exe']
   for (const c of candidates.filter(Boolean)) {
     try { execFileSync(c, ['version'], { stdio: 'ignore', windowsHide: true }); return c } catch { /* next */ }
