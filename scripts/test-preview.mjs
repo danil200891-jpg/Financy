@@ -77,7 +77,7 @@ try {
   await cdp('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 })
   await cdp('Page.reload')
   await until("!!document.querySelector('main') && [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Доход')")
-  assert.equal(await js("document.querySelectorAll('nav button').length"), 4)
+  assert.equal(await js("document.querySelectorAll('nav button').length"), 5)
   assert.deepEqual(errors, [])
   console.log('PASS production browser startup, SW control and offline reload; no uncaught JavaScript errors')
   await cdp('Browser.close')

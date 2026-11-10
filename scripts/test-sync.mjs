@@ -2,8 +2,8 @@
 // browser origins acting as "iPhone" and "PC browser". No user data or real folders are touched.
 import { spawn } from 'node:child_process'
 import { createServer, request } from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { resolve, join } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { resolve, join, sep } from 'node:path'
 import { build } from 'vite'
 import { startServer } from '../sync-server/server.mjs'
 
@@ -67,6 +67,7 @@ try {
       return r.result.value
     }
     await run(`import('/test.js').then(() => window.api.init())`)
+    run.activate = () => cdp('Page.bringToFront')
     return run
   }
   const phone = await open(`http://127.0.0.1:${webPort}`)
@@ -162,6 +163,79 @@ try {
   check((await pc(`api.op('${a}')`)).amount === 40000 && !(await pc(`api.op('${b}')`)).deletedAt, 'restored data did not sync to PC')
   console.log('PASS PC backups: list with counts, protective copy, restore applied as syncable edits')
 
+  // New planning is negotiated; old devices never receive unknown kinds.
+  await phone("api.planSave({id:'synthetic-balance',kind:'balance',amount:100000,at:new Date().toISOString()})")
+  await phone("api.planSave({id:'synthetic-rent',kind:'envelope',name:'Synthetic rent',mode:'obligation',target:75000,priority:1,frequency:'monthly',due:'2026-11-20',state:'active'})")
+  await phone("api.planSave({id:'synthetic-goal',kind:'envelope',name:'Synthetic goal',mode:'goal',target:50000,priority:2,frequency:'once',state:'active'})")
+  await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.plan()')).length === 3, 'Planning definitions not synced')
+  await phone("api.draftReserve('synthetic-rent-reserve',75000,'synthetic-rent')")
+  check((await phone('api.planMoney()')).reserved === 0, 'Pending reserve counted before confirmation')
+  await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserved === 75000, 'Confirmed reserve not delivered')
+  await phone("api.draftReserve('synthetic-concurrent-phone',20000,'synthetic-goal')")
+  await pc("api.draftReserve('synthetic-concurrent-pc',20000,'synthetic-goal')")
+  await phone('api.sync()'); await pc('api.sync()'); await phone('api.sync()')
+  check((await pc('api.planMoney()')).reserved === 95000, 'Concurrent reserves exceeded funds')
+  check((await pc('api.plan()')).some((r) => r.id === 'synthetic-concurrent-pc' && r.status === 'rejected'), 'Stale reserve did not require review')
+  console.log('PASS planning definitions and confirmations sync; concurrent allocation cannot over-reserve')
+  await pc('api.legacyMode(true)')
+  await pc("api.draftReserve('synthetic-legacy-pending',100,'synthetic-goal')")
+  await pc("api.add('Synthetic legacy-capability income',100)")
+  st = await pc('api.sync()')
+  check(st.planningSupported === false && st.phase === 'idle', 'Legacy capability mode broke ordinary sync')
+  check((await pc('api.plan()')).find((r) => r.id === 'synthetic-legacy-pending').status === 'pending', 'Legacy server confirmed a reserve')
+  await pc('api.legacyMode(false)'); await pc('api.sync()'); await phone('api.sync()')
+  check((await pc('api.plan()')).find((r) => r.id === 'synthetic-legacy-pending').status === 'confirmed', 'Pending request did not resume after capability upgrade')
+  console.log('PASS old-server compatibility: ordinary operations continue, reserve waits for capability upgrade')
+  const payment = await phone("api.payReserve('synthetic-rent')")
+  const freeBeforePay = (await pc('api.planMoney()')).free
+  await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).free === freeBeforePay && (await pc('api.planMoney()')).reserves['synthetic-rent'] === 0, 'Reserve payment double-debited free balance')
+  await phone(`api.edit('${payment}', {amount:50000})`); await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves['synthetic-rent'] === 25000, 'Edited payment reserve wrong')
+  await phone(`api.remove('${payment}')`); await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves['synthetic-rent'] === 75000, 'Deleted payment did not restore reserve')
+  const planBackup = await phone('api.makeBackup()')
+  check((await phone('api.backups()')).some((b) => b.file === planBackup.file && b.valid), 'Planning backup not verified')
+  await phone(`api.restore('${planBackup.file}')`); await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves['synthetic-rent'] === 75000, 'Planning backup restore duplicated reserve')
+  console.log('PASS linked payment edit/delete, v2 PC backup and restore without double reserve')
+  const beforeSimple = await phone('api.planMoney()')
+  const simple = await phone('api.createSimple()')
+  await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves[simple.id] === 1000, 'Atomic initial reserve did not sync')
+  const operationsBeforeClose = JSON.stringify(await phone('api.live()'))
+  await phone('api.closeSimple(' + JSON.stringify(simple.id) + ')'); await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves[simple.id] === 0 && (await pc('api.planMoney()')).free === beforeSimple.free, 'Closing plan did not release reserve across devices')
+  check((await pc('api.plan()')).find((r) => r.id === simple.id)?.state === 'closed' && JSON.stringify(await phone('api.live()')) === operationsBeforeClose, 'Closing plan removed financial operations or journal')
+  console.log('PASS simple-plan atomic initial reserve and safe close/release sync without income or expense')
+
+  // Automatic reserve confirmation includes bounded stale-revision retry; no manual sync call.
+  const waitAutomaticReserve = async (expected) => {
+    for (let n = 0; n < 120; n++) {
+      if ((await phone('api.planMoney()')).reserves['synthetic-goal'] === expected) return
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    throw new Error('Automatic reserve did not confirm: ' + JSON.stringify({expected, status: await phone('api.status()'), money: await phone('api.planMoney()'), events: await phone("api.plan().filter(r=>r.kind==='movement').map(r=>({id:r.id,status:r.status,reason:r.reason}))")}))
+  }
+  await phone.activate()
+  let goalReserve = (await phone('api.planMoney()')).reserves['synthetic-goal']
+  await phone('api.staleOnce()')
+  await phone("api.reserveAutomatic(100, 'synthetic-goal')")
+  await waitAutomaticReserve(goalReserve + 100)
+  check(!(await phone('api.plan()')).some((r) => r.kind === 'movement' && r.reason?.includes('Конфликт команды')), 'Transient stale revision required manual review')
+  await server.stop()
+  goalReserve = (await phone('api.planMoney()')).reserves['synthetic-goal']
+  await phone("api.reserveAutomatic(100, 'synthetic-goal')")
+  check((await phone('api.planMoney()')).reserves['synthetic-goal'] === goalReserve, 'Offline reserve was shown as confirmed')
+  server = await startSync()
+  await phone("Promise.resolve(window.dispatchEvent(new Event('online')))")
+  await waitAutomaticReserve(goalReserve + 100)
+  await pc('api.sync()')
+  check((await pc('api.planMoney()')).reserves['synthetic-goal'] === goalReserve + 100, 'Automatic reconnect duplicated or lost reserve')
+  console.log('PASS automatic reserve confirmation, stale retry and offline → online catch-up without manual confirmation')
+
   // 9. server restart keeps everything
   const total = Object.keys(server.db.records).length
   await server.stop(); server = await startSync()
@@ -179,6 +253,6 @@ try {
   web.close()
   await server.stop()
   await new Promise((r) => setTimeout(r, 300))
-  try { rmSync(work, { recursive: true, force: true }) } catch { /* Chrome may still hold the profile */ }
+  try { if (!realpathSync(work).startsWith(realpathSync(resolve('node_modules/.cache')) + (process.platform === 'win32' ? '\\' : '/'))) throw new Error('Unsafe test cleanup path'); rmSync(work, { recursive: true, force: true }) } catch { /* Chrome may still hold the profile */ }
   process.exit(failed ? 1 : 0)
 }

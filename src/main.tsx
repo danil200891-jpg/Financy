@@ -5,6 +5,7 @@ import App from './App'
 import { actions, initStore, waitForWrites } from './lib/store'
 import { toast } from './lib/toast'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
+import { offerUpdate, setUpdateInstaller, watchUpdates } from './lib/updates'
 import { initSync } from './lib/sync'
 
 type Boot = { stage: (s: string) => void; done: () => void; fail: (title: string, err: unknown) => void }
@@ -18,21 +19,12 @@ if ('serviceWorker' in navigator) {
     .then(({ registerSW }) => {
       const update = registerSW({
         immediate: true,
-        // new version downloaded in the background → ask; data in IndexedDB is not affected
-        onNeedRefresh: () => toast('Доступна новая версия', { label: 'Обновить', run: async () => {
-          if (document.querySelector('[role="dialog"]') && !window.confirm('Открыта форма. Обновление закроет её без сохранения незавершённого ввода. Обновить сейчас?')) return false
-          await waitForWrites()
-          await update(true)
-        } }, 0),
+        onNeedRefresh: offerUpdate,
         onOfflineReady: () => toast('Готово к работе без интернета'),
-        onRegisteredSW: (_url, reg) => {
-          if (!reg) return
-          // installed iPhone apps can stay open for days: check for updates hourly and when reopened
-          setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000)
-          document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && reg.update().catch(() => {}))
-        },
+        onRegisteredSW: (_url, reg) => { if (reg) watchUpdates(reg) },
         onRegisterError: (e) => console.warn('SW registration failed', e),
       })
+      setUpdateInstaller(() => update(true))
     })
     .catch((e) => console.warn('SW unavailable', e))
 }

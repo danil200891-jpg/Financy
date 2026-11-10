@@ -43,6 +43,7 @@ export function EditSheet({ id, onClose }: { id: string | null; onClose: () => v
     if (!op) return
     original.current = JSON.stringify(op)
     setForm({
+      planningPayment: op.planningPayment,
       type: op.type, amountText: centsToText(op.amount), title: op.title, categoryId: op.categoryId,
       clientId: op.clientId, date: toDateInput(op.date), note: op.note ?? '', currency: op.currency,
       incomeKind: op.type === 'income' ? incomeKindOf(op) : undefined,

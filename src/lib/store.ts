@@ -1,5 +1,6 @@
+import type { PlanningRecord } from './planning-types'
 import { useSyncExternalStore } from 'react'
-import type { Category, Client, EntityKind, HistoryAction, HistoryEntry, Operation } from './types'
+import type { Category, Client, EntityKind, HistoryAction, HistoryEntry, Operation, FinancialRecord } from './types'
 import { buildDemoOperations, demoCategories, demoClients } from './demo'
 import { normalize } from './parse'
 import * as DB from './db'
@@ -18,7 +19,8 @@ export interface State {
   clients: Client[]
   categories: Category[]
   /** every record including tombstones — used for backup */
-  all: { operations: Operation[]; clients: Client[]; categories: Category[] }
+  planning: PlanningRecord[]
+  all: { planning: PlanningRecord[]; operations: Operation[]; clients: Client[]; categories: Category[] }
 }
 
 const live = <T extends { deletedAt?: string | null }>(xs: T[]) => xs.filter((x) => !x.deletedAt)
@@ -27,6 +29,7 @@ const byDate = (a: Operation, b: Operation) => Date.parse(b.date) - Date.parse(a
 function derive(all: State['all']): State {
   return {
     ready: true,
+    planning: live(all.planning),
     all,
     operations: live(all.operations).sort(byDate),
     deleted: all.operations.filter((o) => o.deletedAt).sort((a, b) => (b.deletedAt ?? '').localeCompare(a.deletedAt ?? '')),
@@ -41,7 +44,7 @@ const catRank = (c: Category) => {
   return i < 0 ? 1000 : i
 }
 
-let state: State = { ready: false, operations: [], deleted: [], clients: [], categories: [], all: { operations: [], clients: [], categories: [] } }
+let state: State = { ready: false, operations: [], deleted: [], clients: [], categories: [], planning: [], all: { planning: [], operations: [], clients: [], categories: [] } }
 
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
@@ -65,14 +68,14 @@ export const getState = () => state
 export const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 const nowIso = () => new Date().toISOString()
 
-const STORE: Record<EntityKind, DB.StoreName> = { operation: 'operations', client: 'clients', category: 'categories' }
+const STORE: Record<EntityKind, DB.StoreName> = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning' }
 
 function hist(entity: EntityKind, entityId: string, action: HistoryAction, before?: unknown, after?: unknown): HistoryEntry {
   return { id: uid('h'), entity, entityId, action, at: nowIso(), before, after }
 }
 
 const pendingWrites = new Set<Promise<void>>()
-type Put = { store: DB.StoreName; value: Operation | Client | Category }
+type Put = { store: DB.StoreName; value: FinancialRecord }
 
 /** Let forms acknowledge success only after their IndexedDB transactions finish. */
 export async function waitForWrites() {
@@ -112,7 +115,7 @@ function writeBatch(puts: Put[], history: HistoryEntry[]) {
 }
 
 /** Preserve the synchronous action API and track its durable completion separately. */
-function write<T extends Operation | Client | Category>(entity: EntityKind, records: T[], history: HistoryEntry[]) {
+function write<T extends FinancialRecord>(entity: EntityKind, records: T[], history: HistoryEntry[]) {
   writeBatch(records.map((value) => ({ store: STORE[entity], value })), history)
 }
 
@@ -127,7 +130,7 @@ export async function initStore() {
     await DB.setMeta('initialized', t)
     data.categories = [...data.categories, ...cats]
   }
-  setAll({ operations: data.operations, clients: data.clients, categories: data.categories })
+  setAll({ operations: data.operations, clients: data.clients, categories: data.categories, planning: data.planning })
   await migrateIncomeCategories().catch(() => { /* retried on the next start; nothing is lost */ })
 }
 
@@ -182,6 +185,7 @@ export function findDuplicate(d: OperationDraft, ignoreId?: string) {
 }
 
 export const actions = {
+  savePlanning(record: PlanningRecord) { write('planning', [record], [hist('planning', record.id, state.all.planning.some((r) => r.id === record.id) ? 'update' : 'create', state.all.planning.find((r) => r.id === record.id), record)]) },
   addOperation(d: OperationDraft) {
     const t = nowIso()
     const op: Operation = { ...d, id: uid('op'), createdAt: t, updatedAt: t, deletedAt: null }
@@ -283,8 +287,8 @@ export const actions = {
     await waitForWrites()
     const t = nowIso()
     const cats = demoCategories.map((c) => ({ ...c, updatedAt: t, deletedAt: null }))
-    await DB.replaceAll({ operations: [], clients: [], categories: cats, history: [] })
-    setAll({ operations: [], clients: [], categories: cats })
+    await DB.replaceAll({ operations: [], clients: [], categories: cats, history: [], planning: [] })
+    setAll({ operations: [], clients: [], categories: cats, planning: [] })
   },
 
   /**
@@ -292,12 +296,12 @@ export const actions = {
    * so they do not bounce back as new changes); each lands in the history store marked `via: 'sync'`.
    * `stillValid` is re-checked synchronously right before writing, so a local edit made meanwhile wins.
    */
-  applyRemote(items: { entity: EntityKind; data: Operation | Client | Category }[], stillValid: (entity: EntityKind, data: Operation | Client | Category, current: Operation | Client | Category | undefined) => boolean = () => true) {
+  applyRemote(items: { entity: EntityKind; data: FinancialRecord }[], stillValid: (entity: EntityKind, data: FinancialRecord, current: FinancialRecord | undefined) => boolean = () => true) {
     const puts: Put[] = []
     const history: HistoryEntry[] = []
     for (const { entity, data } of items) {
       const store = STORE[entity]
-      const before = (state.all[store] as (Operation | Client | Category)[]).find((r) => r.id === data.id)
+      const before = (state.all[store] as (FinancialRecord)[]).find((r) => r.id === data.id)
       if (!stillValid(entity, data, before)) continue
       const action: HistoryAction = !before ? 'create' : data.deletedAt && !before.deletedAt ? 'delete' : !data.deletedAt && before.deletedAt ? 'restore' : 'update'
       puts.push({ store, value: data })
@@ -308,13 +312,13 @@ export const actions = {
   },
 
   /** Writes whole records as new local edits in one transaction (restore a backup, pick a conflict version). */
-  putAsEdits(items: { entity: EntityKind; data: Operation | Client | Category; action?: HistoryAction }[]) {
+  putAsEdits(items: { entity: EntityKind; data: FinancialRecord; action?: HistoryAction }[]) {
     const t = nowIso()
     const puts: Put[] = []
     const history: HistoryEntry[] = []
     for (const { entity, data, action = 'update' } of items) {
       const store = STORE[entity]
-      const before = (state.all[store] as (Operation | Client | Category)[]).find((r) => r.id === data.id)
+      const before = (state.all[store] as (FinancialRecord)[]).find((r) => r.id === data.id)
       const after = { ...data, updatedAt: t }
       puts.push({ store, value: after })
       history.push(hist(entity, data.id, before ? action : 'create', before, after))
@@ -326,6 +330,6 @@ export const actions = {
   /** Used by backup restore after the DB was rewritten. */
   async reload() {
     const data = await DB.loadAll()
-    setAll({ operations: data.operations, clients: data.clients, categories: data.categories })
+    setAll({ operations: data.operations, clients: data.clients, categories: data.categories, planning: data.planning })
   },
 }

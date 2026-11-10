@@ -178,7 +178,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
     clearTimeout(savedTimer.current)
     saving.current = false
     setBusy(false); setSaved(null); setCameraOpen(false)
-    setForm({ ...emptyForm(), type: mode === 'income' ? 'income' : 'expense' }); setFlags({}); setImage(null); setStage('idle')
+    setForm({ ...emptyForm(), type: mode === 'income' ? 'income' : 'expense', categoryId: mode === 'income' ? 'c-work' : null }); setFlags({}); setImage(null); setStage('idle')
     setOcrError(null); setRawText(''); setShowRaw(false); setDupOk(false)
   }
 
@@ -232,7 +232,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
 
   const save = async () => {
     if (saving.current) return
-    const d = toDraft(form, mode === 'camera' ? 'camera' : mode === 'upload' ? 'upload' : 'manual')
+    const d = toDraft(form, mode === 'camera' ? 'camera' : mode === 'upload' ? 'upload' : 'manual', undefined, true)
     if (!d) return
     if (findDuplicate(d) && !dupOk) return setDupOk(true)
     saving.current = true
@@ -247,7 +247,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
     finally { setBusy(false) }
   }
 
-  const draftOk = !!toDraft(form, 'manual')
+  const draftOk = !!toDraft(form, 'manual', undefined, true)
   const showForm = mode === 'income' || mode === 'manual' || stage === 'review'
   const back = () => {
     if (saving.current) return
@@ -361,7 +361,7 @@ export function AddSheet({ mode, onMode, onClose }: { mode: AddMode | null; onMo
           <div className="glass-strong flex flex-col items-center rounded-[28px] px-8 py-6">
             <div className="grid h-14 w-14 place-items-center rounded-full bg-income text-abyss"><Check size={30} strokeWidth={3} /></div>
             <p className="mt-3 text-[16px] font-semibold">Сохранено</p>
-            <p className="num text-[14px] text-mist">{saved.title}, {fmt(saved.amount)}</p>
+            <p className="num text-[14px] text-mist">{saved.title}, {fmt(saved.amount, saved.currency)}</p>
           </div>
         </div>
       )}

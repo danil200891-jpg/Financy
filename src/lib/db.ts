@@ -1,7 +1,10 @@
+import type { PlanningRecord } from './planning-types'
+import type { FinancialRecord } from './types'
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { Category, Client, HistoryEntry, Operation } from './types'
 
 interface FinanceDB extends DBSchema {
+  planning: { key: string; value: PlanningRecord }
   operations: { key: string; value: Operation; indexes: { date: string } }
   clients: { key: string; value: Client }
   categories: { key: string; value: Category }
@@ -9,7 +12,7 @@ interface FinanceDB extends DBSchema {
   meta: { key: string; value: unknown }
 }
 
-export type StoreName = 'operations' | 'clients' | 'categories'
+export type StoreName = 'operations' | 'clients' | 'categories' | 'planning'
 
 let dbp: Promise<IDBPDatabase<FinanceDB>> | null = null
 const changeListeners = new Set<() => void>()
@@ -62,7 +65,7 @@ export function db() {
  *  - never delete/recreate an existing store, never clear data in a migration;
  *  - transform records in place via `tx.objectStore(...)` if a shape changes.
  */
-export const DB_VERSION = 1
+export const DB_VERSION = 2
 
 function open() {
   return openDB<FinanceDB>('finance', DB_VERSION, {
@@ -80,45 +83,46 @@ function open() {
           h.createIndex('at', 'at')
           d.createObjectStore('meta')
         }
-        // if (oldVersion < 2) { … next migration … }
+        if (oldVersion < 2) d.createObjectStore('planning', { keyPath: 'id' })
       },
     })
 }
 
 export async function loadAll() {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'meta'])
-  const [operations, clients, categories, initialized] = await Promise.all([
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'meta'])
+  const [operations, clients, categories, planning, initialized] = await Promise.all([
     tx.objectStore('operations').getAll(),
     tx.objectStore('clients').getAll(),
     tx.objectStore('categories').getAll(),
+    tx.objectStore('planning').getAll(),
     tx.objectStore('meta').get('initialized'),
   ])
   await tx.done
-  return { operations, clients, categories, initialized: !!initialized }
+  return { operations, clients, categories, planning, initialized: !!initialized }
 }
 
 /** Read one committed snapshot, including its history, in a single transaction. */
 export async function backupSnapshot() {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'history'])
-  const [operations, clients, categories, history] = await Promise.all([
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'history'])
+  const [operations, clients, categories, planning, history] = await Promise.all([
     tx.objectStore('operations').getAll(),
     tx.objectStore('clients').getAll(),
     tx.objectStore('categories').getAll(),
-    tx.objectStore('history').getAll(),
+    tx.objectStore('planning').getAll(), tx.objectStore('history').getAll(),
   ])
   await tx.done
-  return { operations, clients, categories, history }
+  return { operations, clients, categories, planning, history }
 }
 
 /** Writes records and their history entries in one transaction so they never diverge. */
 export async function commit(
-  puts: { store: StoreName; value: Operation | Client | Category }[],
+  puts: { store: StoreName; value: FinancialRecord }[],
   history: HistoryEntry[] = [],
 ) {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'history'], 'readwrite')
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'history'], 'readwrite')
   try {
     for (const p of puts) await tx.objectStore(p.store).put(p.value as never)
     for (const h of history) await tx.objectStore('history').put(h)
@@ -166,21 +170,23 @@ export async function replaceAll(data: {
   clients: Client[]
   categories: Category[]
   history: HistoryEntry[]
+  planning?: PlanningRecord[]
 }, snapshot?: { app: string; version: number; exportedAt: string }) {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'history', 'meta'], 'readwrite')
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'history', 'meta'], 'readwrite')
   try {
     if (snapshot) {
-      const [operations, clients, categories, history] = await Promise.all([
+      const [operations, clients, categories, planning, history] = await Promise.all([
         tx.objectStore('operations').getAll(), tx.objectStore('clients').getAll(),
-        tx.objectStore('categories').getAll(), tx.objectStore('history').getAll(),
+        tx.objectStore('categories').getAll(), tx.objectStore('planning').getAll(), tx.objectStore('history').getAll(),
       ])
-      await tx.objectStore('meta').put({ ...snapshot, operations, clients, categories, history }, 'preRestore')
+      await tx.objectStore('meta').put({ ...snapshot, operations, clients, categories, planning, history }, 'preRestore')
     }
-    await Promise.all(['operations', 'clients', 'categories', 'history'].map((s) => tx.objectStore(s as 'history').clear()))
+    await Promise.all(['operations', 'clients', 'categories', ...(data.planning ? ['planning'] : []), 'history'].map((s) => tx.objectStore(s as 'history').clear()))
     for (const o of data.operations) await tx.objectStore('operations').put(o)
     for (const c of data.clients) await tx.objectStore('clients').put(c)
     for (const c of data.categories) await tx.objectStore('categories').put(c)
+    for (const r of data.planning ?? []) await tx.objectStore('planning').put(r)
     for (const h of data.history) await tx.objectStore('history').put(h)
     await tx.done
   } catch (error) {

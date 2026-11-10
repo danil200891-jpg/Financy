@@ -11,11 +11,11 @@
 import { useSyncExternalStore } from 'react'
 import * as DB from '../db'
 import { actions, getState, waitForWrites } from '../store'
-import type { Category, Client, EntityKind, Operation } from '../types'
+import type { EntityKind, FinancialRecord } from '../types'
 import { hashRecord, sha256, canonical } from './canonical'
 import { HttpError, cleanHost, getDevice, pairWith, ping, saveDevice, signed, validHost, type PairedDevice } from './device'
 
-type AnyRecord = Operation | Client | Category
+type AnyRecord = FinancialRecord
 interface Base { [key: string]: { rev: number; hash: string } }
 interface RemoteRecord { entity: EntityKind; id: string; rev: number; hash: string; data: AnyRecord }
 interface PushResult { key: string; status: 'accepted' | 'same' | 'merged' | 'conflict' | 'rejected'; rev?: number; hash?: string; data?: AnyRecord; reason?: string }
@@ -24,6 +24,7 @@ export interface ServerBackup { file: string; kind: 'weekly' | 'manual' | 'pre-r
 
 export interface SyncStatus {
   paired: boolean
+  planningSupported?: boolean
   serverName: string | null
   phase: 'idle' | 'syncing' | 'offline' | 'error'
   reachable: boolean | null
@@ -35,7 +36,7 @@ export interface SyncStatus {
   rejected: number
 }
 
-const LISTS: Record<EntityKind, 'operations' | 'clients' | 'categories'> = { operation: 'operations', client: 'clients', category: 'categories' }
+const LISTS: Record<EntityKind, 'operations' | 'clients' | 'categories' | 'planning'> = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning' }
 const keyOf = (entity: EntityKind, id: string) => `${entity}:${id}`
 const BATCH = 400
 const BACKOFF = [10e3, 30e3, 60e3, 120e3, 300e3]
@@ -72,7 +73,7 @@ async function dirtyRecords(base: Base) {
 
 export async function countPending() {
   if (!status.paired) return 0
-  const n = (await dirtyRecords(await loadBase())).length
+  const n = (await dirtyRecords(await loadBase())).filter((r) => !(r.entity === 'planning' && 'kind' in r.data && r.data.kind === 'movement' && (r.data.status === 'rejected' || r.data.deletedAt))).length
   setStatus({ pending: n })
   return n
 }
@@ -109,10 +110,42 @@ function explain(e: unknown) {
 }
 
 let applying = false
+let planningSupported = false
+
+async function confirmMovements(device: PairedDevice, host: string) {
+  const candidates = getState().planning.filter((r) => r.kind === 'movement' && r.status !== 'rejected').sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
+  for (const event of candidates) {
+    const base = await loadBase()
+    if (base[keyOf('planning', event.id)]?.hash === await hashRecord(event)) continue
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await signed<{ seq: number }>(device, host, 'GET', '/sync/status?planning=2')
+      try {
+        const result = await signed<{ record: RemoteRecord }>(device, host, 'POST', '/planning/commit', { event, baseSeq: current.seq })
+        await applyRecords([{ entity: 'planning', data: result.record.data, sentHash: await hashRecord(event) }])
+        const latestBase = await loadBase()
+        latestBase[keyOf('planning', event.id)] = { rev: result.record.rev, hash: result.record.hash }
+        await DB.setMeta('syncBase', latestBase)
+        break
+      } catch (error) {
+        if (!(error instanceof HttpError) || error.status !== 409) throw error
+        // Another device may have written between status and commit. Refresh and retry
+        // the same command ID; actual insufficient funds still require explicit review.
+        if (error.code === 'planning-stale') {
+          if (attempt === 2) throw error
+          await pull(device, host)
+          continue
+        }
+        actions.savePlanning({ ...event, status: 'rejected', reason: error.code === 'planning-funds' ? 'Недостаточно доступных денег или план изменён. Проверьте резерв.' : 'Конфликт команды резерва. Проверьте изменение в настройках.', updatedAt: new Date().toISOString() })
+        await waitForWrites()
+        break
+      }
+    }
+  }
+}
 
 async function push(device: PairedDevice, host: string) {
   const base = await loadBase()
-  const dirty = await dirtyRecords(base)
+  const dirty = (await dirtyRecords(base)).filter((r) => r.entity !== 'planning' || (planningSupported && !('kind' in r.data && r.data.kind === 'movement')))
   let rejected = 0
   for (let i = 0; i < dirty.length; i += BATCH) {
     const batch = dirty.slice(i, i + BATCH)
@@ -160,9 +193,9 @@ async function applyRecords(items: { entity: EntityKind; data: AnyRecord; sentHa
 }
 
 async function pull(device: PairedDevice, host: string) {
-  let cursor = (await DB.getMeta<number>('syncCursor')) ?? 0
+  let cursor = (await DB.getMeta<number>(planningSupported ? 'syncPlanningCursor' : 'syncCursor')) ?? 0
   for (let page = 0; page < 1000; page++) {
-    const res = await signed<{ records: RemoteRecord[]; cursor: number; more: boolean; serverId: string }>(device, host, 'GET', `/sync/pull?since=${cursor}&limit=500`, undefined, 30000)
+    const res = await signed<{ records: RemoteRecord[]; cursor: number; more: boolean; serverId: string }>(device, host, 'GET', `/sync/pull?since=${cursor}&limit=500${planningSupported ? '&planning=2' : ''}`, undefined, 30000)
     if (res.serverId !== device.serverId) throw new HttpError(409, 'other-server')
     const base = await loadBase()
     const toApply: { entity: EntityKind; data: AnyRecord; baseHash?: string }[] = []
@@ -174,7 +207,7 @@ async function pull(device: PairedDevice, host: string) {
       const curHash = cur ? await hashRecord(cur) : undefined
       if (curHash === r.hash) { base[key] = { rev: r.rev, hash: r.hash }; continue }
       // local copy untouched since the last agreed version (or absent) → take the server's
-      if (!cur || (b && curHash === b.hash)) {
+      if (!cur || (b && curHash === b.hash) || (r.entity === 'planning' && 'kind' in r.data && r.data.kind === 'movement')) {
         toApply.push({ entity: r.entity, data: r.data, baseHash: curHash })
         base[key] = { rev: r.rev, hash: r.hash }
       }
@@ -188,7 +221,7 @@ async function pull(device: PairedDevice, host: string) {
     }
     cursor = res.cursor
     await DB.setMeta('syncBase', base)
-    await DB.setMeta('syncCursor', cursor)
+    await DB.setMeta(planningSupported ? 'syncPlanningCursor' : 'syncCursor', cursor)
     if (!res.more) break
   }
 }
@@ -214,10 +247,14 @@ export function syncNow(): Promise<void> {
         setStatus({ phase: 'offline', reachable: false, error: null })
         return
       }
+      const info = await ping(host)
+      planningSupported = !!info.capabilities?.includes('planning-v2')
+      setStatus({ planningSupported })
       await waitForWrites()
       const rejected = await push(device, host)
       await pull(device, host)
-      const st = await signed<{ lastBackupAt: string | null; conflicts: Conflict[] }>(device, host, 'GET', '/sync/status')
+      if (planningSupported) await confirmMovements(device, host)
+      const st = await signed<{ lastBackupAt: string | null; conflicts: Conflict[] }>(device, host, 'GET', planningSupported ? '/sync/status?planning=2' : '/sync/status')
       const now = new Date().toISOString()
       await DB.setMeta('syncLastAt', now)
       await DB.setMeta('syncServerBackupAt', st.lastBackupAt)
@@ -282,7 +319,7 @@ export async function pair(address: string, code: string) {
     throw new Error('Не удалось связаться с компьютером. Проверьте: компьютер включён и в той же Wi-Fi, сервер Financy Sync запущен, сертификат установлен и включено доверие к нему.')
   }
   // fresh start: every local record is offered to the PC; nothing is replaced
-  await DB.deleteMeta('syncBase'); await DB.deleteMeta('syncCursor')
+  await DB.deleteMeta('syncBase'); await DB.deleteMeta('syncCursor'); await DB.deleteMeta('syncPlanningCursor')
   failures = 0
   setStatus({ paired: true, error: null })
   await syncNow()
@@ -291,7 +328,7 @@ export async function pair(address: string, code: string) {
 /** Forgets the PC on this device only. All financial data stays on the phone and on the PC. */
 export async function unpair() {
   clearTimeout(timer)
-  for (const k of ['syncDevice', 'syncBase', 'syncCursor', 'syncLastAt', 'syncServerBackupAt']) await DB.deleteMeta(k)
+  for (const k of ['syncDevice', 'syncBase', 'syncCursor', 'syncPlanningCursor', 'syncLastAt', 'syncServerBackupAt']) await DB.deleteMeta(k)
   setStatus({ paired: false, serverName: null, phase: 'idle', reachable: null, lastSyncAt: null, lastBackupAt: null, pending: 0, error: null, conflicts: [] })
 }
 
@@ -308,7 +345,7 @@ async function withServer<T>(fn: (d: PairedDevice, host: string) => Promise<T>) 
 export const listServerBackups = () => withServer(async (d, h) => (await signed<{ backups: ServerBackup[] }>(d, h, 'GET', '/backups')).backups)
 
 export async function fetchServerBackup(file: string) {
-  const b = await withServer((d, h) => signed<Record<string, unknown> & { integrity?: { hash: string } }>(d, h, 'GET', `/backups/file?name=${encodeURIComponent(file)}`, undefined, 60000))
+  const b = await withServer((d, h) => signed<Record<string, unknown> & { integrity?: { hash: string } }>(d, h, 'GET', `/backups/file?name=${encodeURIComponent(file)}${planningSupported ? '&planning=2' : ''}`, undefined, 60000))
   const { integrity, ...body } = b
   if (!integrity || (await sha256(canonical(body))) !== integrity.hash) throw new Error('Копия повреждена при передаче. Попробуйте ещё раз.')
   return b

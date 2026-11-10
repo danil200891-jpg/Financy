@@ -4,12 +4,46 @@ import * as DB from '../src/lib/db'
 import * as backup from '../src/lib/backup'
 import * as sync from '../src/lib/sync'
 import { getDevice } from '../src/lib/sync/device'
+import { savePlan, savePlanWithReserve, closePlan, financials, reserve } from '../src/lib/planning'
 
 const draft = (title: string, amount: number) => ({
   title, amount, type: 'income' as const, currency: 'EUR', date: new Date().toISOString(), categoryId: 'c-work', clientId: null, source: 'manual' as const,
 })
 
 export const api = {
+  planSave: savePlan,
+  reserveAutomatic: (amount: number, to: string) => reserve(amount, null, to),
+  staleOnce() {
+    const original = window.fetch
+    window.fetch = async (...args) => {
+      if (String(args[0]).endsWith('/planning/commit')) {
+        window.fetch = original
+        return new Response(JSON.stringify({ error: 'planning-stale' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+      }
+      return original(...args)
+    }
+  },
+  createSimple: () => savePlanWithReserve({ kind: 'envelope', name: 'Synthetic simple sync', mode: 'goal', frequency: 'once', target: 5000, priority: 3, state: 'active' }, 1000),
+  async closeSimple(id: string) { await sync.syncNow(); await closePlan(getState().planning.find((r) => r.id === id)!) },
+  plan: () => getState().planning,
+  planMoney: () => financials(getState().operations, getState().planning),
+  async draftReserve(id: string, amount: number, to: string) {
+    await savePlan({ id, kind: 'movement', amount, from: null, to, status: 'pending' })
+  },
+  async payReserve(id: string) {
+    const op = actions.addOperation({ ...draft('Synthetic rent payment', 75000), type: 'expense', planningPayment: { envelopeId: id, reserved: 75000, period: '2026-11-20' } })
+    await waitForWrites(); return op.id
+  },
+  legacyMode(enabled: boolean) {
+    const original = (window as unknown as { testFetch?: typeof fetch }).testFetch ?? window.fetch
+    ;(window as unknown as { testFetch?: typeof fetch }).testFetch = original
+    window.fetch = enabled ? async (...args) => {
+      const response = await original(...args)
+      if (!String(args[0]).endsWith('/ping')) return response
+      const info = await response.json(); delete info.capabilities
+      return new Response(JSON.stringify(info), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    } : original
+  },
   async init() { await initStore(); await sync.initSync() },
   pair: (host: string, code: string) => sync.pair(host, code),
   sync: async () => { await sync.syncNow(); return sync.getSyncStatus() },

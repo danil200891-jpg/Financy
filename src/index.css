@@ -77,19 +77,33 @@ textarea {
   font-feature-settings: 'tnum';
 }
 
-.glass {
-  background: var(--color-glass);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+/* Shared surfaces: tint for nested controls, blur only for large containers. */
+.glass, .glass-strong, .glass-tint {
+  background: linear-gradient(135deg, rgba(255,255,255,0.065), rgba(255,255,255,0.015)), rgba(20,22,36,0.66);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.055), 0 8px 28px rgba(0,0,0,0.12);
   border: 1px solid var(--color-line);
 }
-
-.glass-strong {
-  background: rgba(18, 20, 32, 0.72);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+.glass {
+  backdrop-filter: blur(12px) saturate(135%);
+  -webkit-backdrop-filter: blur(12px) saturate(135%);
 }
+.glass-strong {
+  background: linear-gradient(145deg, rgba(255,255,255,.045), transparent), rgba(18,20,32,.82);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  border-color: rgba(255,255,255,.1);
+}
+.glass .glass, .glass-strong .glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* Row actions share a light surface without stacking GPU blur layers on iPhone. */
+button.press:not(.glass):not(.glass-strong):not(.glass-tint) {
+  background-image: linear-gradient(135deg, rgba(255,255,255,.035), rgba(255,255,255,.005));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+.plan-expansion { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows 300ms var(--ease-spring), visibility 300ms; }
+.plan-expansion.is-open { grid-template-rows: 1fr; visibility: visible; }
 
 .pt-safe {
   padding-top: calc(var(--sat) + 12px);
@@ -202,3 +216,9 @@ textarea:focus-visible {
   outline-offset: 2px;
   border-radius: 12px;
 }
+
+select option { background: #121420; color: #f2f3f8; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #7c8cff; outline-offset: 3px; }
+button:disabled { cursor: default; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .glass, .glass-strong { background: #171a29; } }

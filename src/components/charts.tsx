@@ -1,21 +1,6 @@
 import { useId, useState } from 'react'
 import { fmt, fmtShort, monthShort } from '../lib/format'
-
-/** Smooth path through points using Catmull-Rom → Bézier. */
-function smooth(pts: [number, number][]) {
-  if (pts.length < 2) return ''
-  let d = `M${pts[0][0]},${pts[0][1]}`
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] ?? pts[i]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[i + 2] ?? p2
-    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6]
-    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6]
-    d += ` C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${p2[0]},${p2[1]}`
-  }
-  return d
-}
+import { smoothPath } from '../lib/sparkline'
 
 export function Sparkline({ data, height = 64, color = '#ffffff' }: { data: number[]; height?: number; color?: string }) {
   const id = useId()
@@ -24,9 +9,9 @@ export function Sparkline({ data, height = 64, color = '#ffffff' }: { data: numb
   const min = Math.min(...data, 0)
   const max = Math.max(...data, 1)
   const pts = data.map((v, i) => [(i / (data.length - 1)) * w, height - 4 - ((v - min) / (max - min)) * (height - 8)] as [number, number])
-  const line = smooth(pts)
+  const line = smoothPath(pts)
   return (
-    <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="h-full w-full overflow-visible">
+    <svg key={data.join(',')} role="img" aria-label="Накопительный итог доходов и расходов по дням" viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="h-full w-full overflow-visible">
       <defs>
         <linearGradient id={id} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0" stopColor={color} stopOpacity="0.35" />
@@ -38,11 +23,12 @@ export function Sparkline({ data, height = 64, color = '#ffffff' }: { data: numb
         d={line}
         fill="none"
         stroke={color}
-        strokeWidth="2"
+        strokeWidth="1.7"
         strokeLinecap="round"
+        strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
         pathLength={1}
-        style={{ strokeDasharray: 1, ['--len' as string]: 1, animation: 'draw 1.4s var(--ease-spring) both' }}
+        style={{ filter: `drop-shadow(0 0 2px ${color}55)`, strokeDasharray: 1, ['--len' as string]: 1, animation: 'draw 900ms var(--ease-spring) both' }}
       />
     </svg>
   )

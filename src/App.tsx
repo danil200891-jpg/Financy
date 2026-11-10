@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { TabBar, type Tab } from './components/TabBar'
 import { Home } from './screens/Home'
+import { Planning } from './screens/Planning'
 import { History } from './screens/History'
 import { Clients } from './screens/Clients'
 import { ClientDetail } from './screens/ClientDetail'
@@ -43,6 +44,7 @@ export default function App() {
       <div className="fixed inset-x-0 top-0 z-30 h-[env(safe-area-inset-top)] bg-abyss/75 backdrop-blur-xl" />
       <main key={tab} className="anim-screen">
         {tab === 'home' && <Home nav={nav} />}
+        {tab === 'planning' && <Planning />}
         {tab === 'history' && <History nav={nav} />}
         {tab === 'clients' && <Clients nav={nav} />}
         {tab === 'analytics' && <Analytics nav={nav} />}

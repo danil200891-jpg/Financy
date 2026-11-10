@@ -12,7 +12,10 @@ import { parseRecognized } from '../src/lib/receipt'
 import { preprocess, recognize } from '../src/lib/ocr'
 import { toast, dismissToast } from '../src/lib/toast'
 import type { Operation, OpType } from '../src/lib/types'
+import { smoothSegments, smoothPath } from '../src/lib/sparkline'
 import { incomeSources } from '../src/lib/income-sources'
+import { watchUpdates, checkForUpdate } from '../src/lib/updates'
+import { financials, savePlan, savePlanWithReserve } from '../src/lib/planning'
 
 const wait = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -21,7 +24,7 @@ async function until(test: () => boolean | Promise<boolean>) {
   throw new Error('Timed out waiting for application state')
 }
 function button(text: string, root: ParentNode = document.querySelector('[role="dialog"]') ?? document) {
-  const result = [...root.querySelectorAll('button')].find((node) => node.textContent?.trim() === text || node.getAttribute('aria-label') === text || node.querySelector('p')?.textContent?.trim() === text || node.querySelector('span')?.textContent?.trim() === text)
+  const result = [...root.querySelectorAll('button')].filter((node) => !node.closest('[aria-hidden="true"]')).find((node) => node.textContent?.trim() === text || node.getAttribute('aria-label') === text || node.querySelector('p')?.textContent?.trim() === text || node.querySelector('span')?.textContent?.trim() === text)
   check(result && !result.disabled, `Missing enabled button ${text}`)
   return result
 }
@@ -29,7 +32,7 @@ async function click(text: string, root?: ParentNode) { button(text, root).click
 async function input(selector: string, value: string) {
   const element = document.querySelector<HTMLInputElement>(selector)
   check(element, `Missing input ${selector}`)
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value)
+  Object.getOwnPropertyDescriptor(element.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(element, value)
   element.dispatchEvent(new Event('input', { bubbles: true }))
   element.dispatchEvent(new Event('change', { bubbles: true }))
   await wait()
@@ -45,7 +48,35 @@ async function closeSheet() {
 export async function runAppRegression() {
   const failures: string[] = []
   window.addEventListener('unhandledrejection', (event) => failures.push(String(event.reason)))
+  // Upgrade a genuine v1 database in this fresh profile, including an existing sync setting.
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('finance', 1)
+    request.onupgradeneeded = () => {
+      const d = request.result
+      d.createObjectStore('operations', { keyPath: 'id' }).createIndex('date', 'date')
+      d.createObjectStore('clients', { keyPath: 'id' }); d.createObjectStore('categories', { keyPath: 'id' })
+      const h = d.createObjectStore('history', { keyPath: 'id' }); h.createIndex('entityId', 'entityId'); h.createIndex('at', 'at')
+      d.createObjectStore('meta')
+    }
+    request.onsuccess = () => { const d = request.result; const tx = d.transaction('meta', 'readwrite'); tx.objectStore('meta').put('synthetic-preserved-setting', 'migration-proof'); tx.oncomplete = () => { d.close(); resolve() } }
+    request.onerror = () => reject(request.error)
+  })
   await initStore()
+  check((await DB.db()).version === 2 && await DB.getMeta('migration-proof') === 'synthetic-preserved-setting', 'v1 upgrade lost settings')
+  for (const series of [[0, 0, 0, 100], [10, 5, 20, 20, -30], [1, 1], [0, 50, 0, 50]]) {
+    const points = series.map((value, index) => [index * 10, value] as [number, number])
+    check(smoothPath(points).includes(' C'), 'Sparkline has no smooth curve')
+    for (const { start, c1, c2, end } of smoothSegments(points)) {
+      let previous = start[1]
+      for (let i = 1; i <= 100; i++) {
+        const t = i / 100, u = 1 - t
+        const y = u ** 3 * start[1] + 3 * u ** 2 * t * c1[1] + 3 * u * t ** 2 * c2[1] + t ** 3 * end[1]
+        check(y >= Math.min(start[1], end[1]) - 1e-8 && y <= Math.max(start[1], end[1]) + 1e-8, 'Curve invented a financial peak')
+        check((end[1] >= start[1] ? y >= previous - 1e-8 : y <= previous + 1e-8), 'Curve reversed financial direction')
+        previous = y
+      }
+    }
+  }
   for (const [text, cents] of [['1 234,56', 123456], ['0,01', 1], ['12.50', 1250], ['0', null], ['1.2.3', null], ['12abc', null], ['1,234', null], ['999999999999999999', null]] as const) {
     check(textToCents(text) === cents, `Incorrect amount ${text}`)
   }
@@ -111,14 +142,28 @@ export async function runAppRegression() {
   console.log('PASS JSON compatibility, damaged-file rejection, idempotent merge, replacement/undo, CSV safety')
 
   await actions.wipeAll() // Only this isolated test database is reset.
+  await savePlan({ kind: 'balance', amount: 100000, at: new Date().toISOString() })
+  const beforeAtomic = JSON.stringify(await DB.backupSnapshot())
+  const planningPut = IDBObjectStore.prototype.put
+  IDBObjectStore.prototype.put = function (...args: Parameters<IDBObjectStore['put']>) {
+    if (this.name === 'planning' && args[0]?.kind === 'movement') { IDBObjectStore.prototype.put = planningPut; throw new DOMException('Synthetic plan quota', 'QuotaExceededError') }
+    return planningPut.apply(this, args)
+  }
+  let atomicFailed = false
+  try { await savePlanWithReserve({ kind: 'envelope', name: 'Synthetic atomic', mode: 'goal', frequency: 'once', target: 50000, priority: 1, state: 'active' }, 25000) } catch { atomicFailed = true }
+  IDBObjectStore.prototype.put = planningPut
+  check(atomicFailed && JSON.stringify(await DB.backupSnapshot()) === beforeAtomic, 'Plan/reserve failure persisted a partial transaction')
+  await actions.wipeAll()
+  console.log('PASS bounded smooth financial curve and atomic plan-plus-reserve rollback')
   createRoot(document.getElementById('root')!).render(createElement(App))
   await until(() => !!document.querySelector('main'))
-  check(document.querySelectorAll('nav button').length === 4 && !document.querySelector('button[aria-label="Добавить операцию"]'), 'Bottom navigation still has central add button')
+  check(document.querySelectorAll('nav button').length === 5 && !document.querySelector('button[aria-label="Добавить операцию"]'), 'Bottom navigation still has central add button')
   await click('Расход')
   check(!document.querySelector('[role="dialog"] input') && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? ''), 'Expense chooser opens a keyboard or form')
   await click('Вручную')
   await input('input[aria-label="Название"]', 'Synthetic UI')
   await input('input[aria-label="Сумма"]', '12,34')
+  await click('Продукты')
   const saveButton = button('Сохранить расход')
   saveButton.click(); saveButton.click()
   await until(() => !document.querySelector('[role="dialog"]'))
@@ -182,17 +227,17 @@ export async function runAppRegression() {
   await click('Расход'); await click('Вручную'); await click('Назад')
   check(button('Камера') && button('Из фото') && button('Вручную'), 'Expense back navigation failed')
   await click('Назад')
-  console.log('PASS income/expense entry, four-tab navigation, keyboard-free chooser, saved-source threshold/filter/selection, back and double-tap protection')
+  console.log('PASS income/expense entry, five-tab navigation, keyboard-free chooser, saved-source threshold/filter/selection, back and double-tap protection')
 
   // Income form: switch, three categories, searchable client picker, optional client/note.
   const visibleIncomeCats = getState().categories.filter((c) => c.type === 'income' && !c.archived).map((c) => c.name)
   check(JSON.stringify(visibleIncomeCats) === JSON.stringify(['Работа', 'Прочие доходы', 'Разовый клиент']), `Income categories are ${visibleIncomeCats.join(', ')}`)
   check(getState().categories.some((c) => c.id === 'c-photo' && c.archived && !c.deletedAt), 'Old «Съёмки» category was removed instead of hidden')
   await click('Доход')
-  for (const label of ['Работа', 'Съёмки', 'Разовый доход']) check(button(label), `Income switch option ${label} missing`)
+  check(!document.querySelector('input[placeholder="Заметка"]') && !document.querySelector('[role="dialog"]')!.textContent!.includes('Съёмки'), 'Creation still contains obsolete switch or note')
   const catLabels = [...document.querySelectorAll('[role="dialog"] .grid-cols-3 button span')].map((node) => node.textContent)
   check(JSON.stringify(catLabels) === JSON.stringify(['Работа', 'Прочие доходы', 'Разовый клиент']), `Income category grid shows ${catLabels.join(', ')}`)
-  await click('Съёмки')
+  await click('Прочие доходы')
   await input('input[aria-label="Сумма"]', '75')
   await input('input[aria-label="Название"]', 'Synthetic shoot')
   await click('Выбрать клиента')
@@ -208,8 +253,8 @@ export async function runAppRegression() {
   const created = getState().clients.find((c) => c.name === 'Synthetic new client')
   check(created && document.querySelector('[aria-label="Выбрать клиента"]')?.textContent?.includes('Synthetic new client'), 'New client was not created and selected')
   await click('Сохранить доход'); await until(() => !document.querySelector('[role="dialog"]'))
-  const shoot = getState().operations.find((o) => o.title === 'Synthetic shoot')
-  check(shoot && shoot.incomeKind === 'shoot' && shoot.clientId === created!.id && shoot.amount === 7500 && !shoot.note, 'Income with switch/client saved incorrectly')
+  const shoot = getState().operations.find((o) => o.title === 'Synthetic new client')
+  check(shoot && shoot.categoryId === 'c-other-in' && shoot.clientId === created!.id && shoot.amount === 7500 && !shoot.note, 'Income with switch/client saved incorrectly')
   await click('Доход')
   await input('input[aria-label="Сумма"]', '5')
   await input('input[aria-label="Название"]', 'Synthetic no client')
@@ -244,7 +289,7 @@ export async function runAppRegression() {
     await initStore()
     check(getState().categories.filter((c) => c.id === 'c-oneoff').length === 1, 'Migration not idempotent')
   }
-  console.log('PASS income switch, exactly three income categories, hidden legacy category, client search/add/dedupe/select, optional client and note')
+  console.log('PASS simplified income, exactly three income categories, hidden legacy category, client search/add/dedupe/select, optional client and note')
 
   toast('Synthetic persistent update', { label: 'Synthetic update', run: () => false }, 0)
   toast('Synthetic transient', undefined, 20); await wait(60)
@@ -287,6 +332,125 @@ export async function runAppRegression() {
   receipt.width = receipt.height = 0
   console.log('PASS gallery file selection, actual local OCR and editing recognized amount before save')
   console.log('PASS persistent update prompt, bounded photo processing, recognition cancellation, direct gallery picker and camera cleanup')
+
+  await click('Планирование', document.querySelector('nav')!)
+  const operationCount = getState().operations.length
+  await click('Указать фактический остаток')
+  await input('input[aria-label="Фактический баланс"]', '1000')
+  await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(financials(getState().operations, getState().planning).balance === 100000 && getState().operations.length === operationCount, 'Balance checkpoint manufactured an operation')
+  await click('Настройки планирования'); await click('Настроить баланс'); await input('input[aria-label="Фактический баланс"]', '950')
+  await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().planning.filter((r) => r.kind === 'balance').length === 2, 'Manual correction overwrote balance history')
+  check(!document.querySelector('main input[type="checkbox"]') && !document.querySelector('main')!.textContent!.includes('Хватит ли денег'), 'Planning main remains overloaded')
+  await click('Добавить план'); await input('input[aria-label="Название плана"]', 'Synthetic rent')
+  await input('input[aria-label="Нужный бюджет"]', '750'); await input('input[aria-label="Зарезервировать сейчас"]', '9999')
+  check([...document.querySelectorAll('button')].some((b) => b.textContent === 'Создать план' && b.disabled), 'Unaffordable reserve enabled creation')
+  await input('input[aria-label="Зарезервировать сейчас"]', '750')
+  const reserveButton = button('Создать план'); reserveButton.click(); reserveButton.click()
+  await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().planning.filter((r) => r.kind === 'movement').length === 1 && financials(getState().operations, getState().planning).reserved === 0, 'Offline reserve was duplicated or confirmed without PC')
+  const planned = await backup.buildBackup()
+  check(backup.parseBackup(JSON.stringify(planned)).planning?.length === 4, 'Planning backup roundtrip lost records')
+  const { planning: _planning, ...legacyBackup } = planned
+  await backup.restore(backup.parseBackup(JSON.stringify({ ...legacyBackup, version: 1 })), 'replace')
+  check(getState().planning.length === 4, 'Legacy replacement cleared planning')
+  await actions.reload()
+  check(getState().planning.length === 4 && getState().operations.length === operationCount, 'Planning reload lost financial data')
+  // A confirmed reserve restored on a new device must be rechecked, not blindly authorized.
+  const movement = planned.planning!.find((r) => r.kind === 'movement')!
+  await backup.restore({ ...planned, planning: [{ ...movement, id: 'synthetic-imported-reserve', status: 'confirmed', updatedAt: new Date().toISOString() }] }, 'merge')
+  check(getState().planning.find((r) => r.id === 'synthetic-imported-reserve')?.status === 'pending', 'Imported reserve bypassed server validation')
+  await savePlan({ kind: 'settings', id: 'planning-settings', auto: true })
+  console.log('PASS v1→v2 non-destructive upgrade, manual balance history, planning UI, provisional reserve double-tap guard, reload, v1/v2 backup compatibility')
+
+  await click('Главная', document.querySelector('nav')!)
+  await click('Доход'); await input('input[aria-label="Сумма"]', '5,50')
+  check(!document.querySelector('input[placeholder="Заметка"]'), 'New income still has note input')
+  await click('Сохранить доход'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().operations.some((o) => o.type === 'income' && o.amount === 550 && o.title === '' && o.categoryId === 'c-work'), 'Optional income source or default category failed')
+  await click('Расход'); await click('Вручную'); await input('input[aria-label="Название"]', 'Lidl')
+  check(button('Продукты').getAttribute('aria-pressed') === 'true', 'Known merchant category not suggested')
+  await click('Кафе'); await input('input[aria-label="Название"]', 'Mercadona')
+  check(button('Кафе').getAttribute('aria-pressed') === 'true', 'Automatic category overrode a manual choice')
+  await input('input[aria-label="Название"]', ''); await input('input[aria-label="Сумма"]', '25')
+  await click('Сохранить расход'); await until(() => !document.querySelector('[role="dialog"]'))
+  check(getState().operations.some((o) => o.type === 'expense' && o.amount === 2500 && o.title === 'Кафе'), 'Optional recipient did not fall back to category name')
+  console.log('PASS anonymous income, default category, optional recipient, local category hints and manual override priority')
+  const recurring = getState().planning.find((r) => r.kind === 'envelope')!
+  actions.addOperation({ ...draft('Synthetic paid period', recurring.target!), planningPayment: { envelopeId: recurring.id, reserved: 0, period: recurring.due } }); await waitForWrites()
+  await savePlan({ ...recurring, target: recurring.target! + 5000 })
+  const revised = getState().planning.find((r) => r.id === recurring.id)!
+  check(revised.due! > recurring.due! && revised.terms?.[0]?.target === recurring.target, 'Changing recurring amount reopened an already paid period')
+  console.log('PASS recurring amount changes preserve already-paid period terms')
+
+  await savePlan({ kind: 'balance', amount: 500000, at: new Date().toISOString() })
+  await click('Планирование', document.querySelector('nav')!)
+  const beforeSimple = getState().operations.length
+  await click('Добавить план')
+  await input('input[aria-label="Название плана"]', 'Synthetic simple plan')
+  await input('input[aria-label="Нужный бюджет"]', '800')
+  await input('input[aria-label="Зарезервировать сейчас"]', '500')
+  check(document.querySelector('[role="dialog"]')!.textContent!.includes('Останется свободно'), 'Missing live budget preview')
+  await click('Создать план'); await until(() => !document.querySelector('[role="dialog"]'))
+  const simple = getState().planning.find((r) => r.name === 'Synthetic simple plan')!
+  const firstReserve = getState().planning.find((r) => r.kind === 'movement' && r.to === simple.id)!
+  actions.savePlanning({ ...firstReserve, status: 'confirmed' }); await waitForWrites()
+  await click('Открыть план Synthetic simple plan')
+  check(!document.querySelector('[role="dialog"]') && document.activeElement?.tagName !== 'INPUT', 'Plan tap opened a modal or keyboard')
+  await input('input[aria-label="Сумма резерва Synthetic simple plan"]', '999999')
+  check([...document.querySelectorAll<HTMLButtonElement>('.plan-expansion.is-open button')].find((b) => b.textContent === 'Подтвердить резерв')?.disabled, 'Inline reserve exceeded free funds')
+  await input('input[aria-label="Сумма резерва Synthetic simple plan"]', '100')
+  check(document.querySelector('main')!.textContent!.includes('После пополнения'), 'Inline reserve preview missing')
+  const inlineSubmit = button('Подтвердить резерв'); inlineSubmit.click(); inlineSubmit.click()
+  await until(() => button('Открыть план Synthetic simple plan').getAttribute('aria-expanded') === 'false')
+  const increase = getState().planning.find((r) => r.kind === 'movement' && r.to === simple.id && r.id !== firstReserve.id)!
+  check(increase.amount === 10000, 'Reserve edit created full amount instead of delta')
+  actions.savePlanning({ ...increase, status: 'confirmed' }); await waitForWrites()
+  const freeBeforeDecrease = financials(getState().operations, getState().planning).free
+  await click('Открыть план Synthetic simple plan')
+  await click('Уменьшить или перевести резерв')
+  await input('select[aria-label="Действие с резервом"]', 'set')
+  await input('input[aria-label="Сумма движения"]', '450')
+  await click('Сохранить'); await until(() => !document.querySelector('[role="dialog"]'))
+  await click('Настройки плана Synthetic simple plan')
+  check(!document.querySelector('input[aria-label="Зарезервировать сейчас"]'), 'Metadata edit still mixes reserve input')
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1)
+  await input('input[aria-label="Дата платежа"]', toDraft({ ...emptyForm(), amountText: '1', title: 'Synthetic', date: [tomorrow.getFullYear(), String(tomorrow.getMonth() + 1).padStart(2, '0'), String(tomorrow.getDate()).padStart(2, '0')].join('-') }, 'manual')!.date.slice(0, 10))
+  await input('input[aria-label="Нужный бюджет"]', '900')
+  await click('Сохранить изменения'); await until(() => !document.querySelector('[role="dialog"]'))
+  const decrease = getState().planning.find((r) => r.kind === 'movement' && r.from === simple.id)!
+  check(decrease.amount === 15000 && financials(getState().operations, getState().planning).free === freeBeforeDecrease, 'Pending release was spent before confirmation')
+  actions.savePlanning({ ...decrease, status: 'confirmed' }); await waitForWrites()
+  check(financials(getState().operations, getState().planning).reserves[simple.id] === 45000 && financials(getState().operations, getState().planning).free === freeBeforeDecrease! + 15000, 'Reserve reduction did not release exactly the delta')
+  check(getState().planning.find((r) => r.id === simple.id)?.target === 90000, 'Budget edit was lost')
+  await click('Настройки плана Synthetic simple plan')
+  const confirm = window.confirm; window.confirm = () => true
+  await click('Удалить план'); await until(() => !document.querySelector('[role="dialog"]'))
+  window.confirm = confirm
+  check(getState().planning.find((r) => r.id === simple.id)?.state === 'closed' && getState().operations.length === beforeSimple, 'Closing plan deleted financial data')
+  const release = getState().planning.find((r) => r.kind === 'movement' && r.from === simple.id && r.status === 'pending')!
+  check(release.amount === 45000, 'Deleting plan did not request exact remaining reserve release')
+  actions.savePlanning({ ...release, status: 'confirmed' }); await waitForWrites()
+  check(financials(getState().operations, getState().planning).reserves[simple.id] === 0 && !document.querySelector('main')!.textContent!.includes('Synthetic simple plan'), 'Closed empty plan did not move to archive')
+  console.log('PASS inline plan expansion without keyboard/modal, preview, insufficient funds, duplicate-tap guard, automatic collapse, reserve reduction, independent metadata edit and safe archive')
+
+  let updateChecks = 0
+  watchUpdates({ update: async () => { updateChecks++ } } as unknown as ServiceWorkerRegistration)
+  await wait(); check(updateChecks === 1, 'Startup did not check for an update')
+  const realNow = Date.now
+  try {
+    Date.now = () => realNow() + 16000
+    document.dispatchEvent(new Event('visibilitychange')); await wait()
+    check(Number(updateChecks) === 2, 'Foreground did not check for an update')
+    window.dispatchEvent(new Event('pageshow')); await wait()
+    check(Number(updateChecks) === 2, 'Foreground events caused duplicate update checks')
+    window.dispatchEvent(new Event('online')); await wait()
+    check(Number(updateChecks) === 3, 'Reconnect did not check for an update')
+    await checkForUpdate(true)
+    check(Number(updateChecks) === 4, 'Manual update check did not run')
+  } finally { Date.now = realNow }
+  console.log('PASS PWA update checks at startup, foreground, online and manual request; duplicate foreground events throttled')
 
   const start = performance.now()
   const seed: Operation[] = Array.from({ length: 10000 }, (_, index) => ({

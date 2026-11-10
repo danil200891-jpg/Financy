@@ -72,7 +72,7 @@ export function deviceName() {
   return /Windows/.test(ua) ? 'Браузер Windows' : /Mac/.test(ua) ? 'Браузер Mac' : 'Браузер'
 }
 
-export interface PingInfo { app: string; serverId: string; name: string; hosts: string[] }
+export interface PingInfo { capabilities?: string[]; app: string; serverId: string; name: string; hosts: string[] }
 export const ping = (host: string, timeout = 4000) => request(`${baseUrl(host)}/ping`, { timeout }) as Promise<PingInfo>
 
 /** Pairs this device with the code shown on the PC. Nothing secret is sent: only the public key. */

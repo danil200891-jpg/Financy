@@ -1,61 +1,36 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { MoneySummary } from './Planning'
 import { useFittedText } from '../lib/use-fitted-text'
 import { Settings2, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import type { Nav } from '../App'
 import { useStore } from '../lib/store'
-import { byPeriod, dailyCumulative, groupSum, totals } from '../lib/stats'
+import { byPeriod, dailyCumulative, totals } from '../lib/stats'
 import { cap, fmtShort, monthName, splitMoney } from '../lib/format'
-import { Avatar, Card, Empty, IconButton, OpRow } from '../components/ui'
+import { Card, Empty, IconButton, OpRow } from '../components/ui'
 import { Sparkline } from '../components/charts'
 
-function greeting(d = new Date()) {
-  const h = d.getHours()
-  if (h < 6) return 'Доброй ночи'
-  if (h < 12) return 'Доброе утро'
-  if (h < 18) return 'Добрый день'
-  return 'Добрый вечер'
-}
-
 /** The hero: a wallet-style card with slowly drifting aurora and a gentle tilt under the finger. */
-function BalanceCard({ net, income, expense, spark }: { net: number; income: number; expense: number; spark: number[] }) {
-  const ref = useRef<HTMLDivElement>(null)
+function BalanceCard({ net, income, expense, spark, period }: { period: Date; net: number; income: number; expense: number; spark: number[] }) {
   const balance = useFittedText<HTMLParagraphElement>(net)
-  const [tilt, setTilt] = useState({ x: 0, y: 0 })
   const m = splitMoney(net)
-  const onMove = (e: React.PointerEvent) => {
-    const r = ref.current!.getBoundingClientRect()
-    setTilt({ x: ((e.clientY - r.top) / r.height - 0.5) * -6, y: ((e.clientX - r.left) / r.width - 0.5) * 8 })
-  }
   return (
     <div className="px-4 [perspective:900px]">
       <div
-        ref={ref}
-        onPointerMove={onMove}
-        onPointerLeave={() => setTilt({ x: 0, y: 0 })}
-        className="relative isolate overflow-hidden rounded-[30px] p-5 pb-4 shadow-[0_30px_60px_-25px_rgba(124,140,255,0.6)] transition-transform duration-500 ease-[var(--ease-spring)]"
-        style={{ transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`, background: '#14163a' }}
+        className="relative isolate overflow-hidden glass rounded-[26px] p-4 shadow-[0_30px_60px_-25px_rgba(124,140,255,0.6)] transition-transform duration-500 ease-[var(--ease-spring)]"
+        style={{ background: 'linear-gradient(135deg,rgba(86,101,255,.35),rgba(20,22,40,.8),rgba(47,217,189,.14))' }}
       >
-        {/* aurora */}
-        <div className="pointer-events-none absolute inset-0 -z-10">
-          <div className="absolute -top-1/2 -left-1/3 h-[130%] w-[90%] rounded-full bg-[#5865ff] blur-[50px]" style={{ animation: 'aurora 14s ease-in-out infinite' }} />
-          <div className="absolute -right-1/4 -bottom-1/2 h-[120%] w-[85%] rounded-full bg-[#a24dff] blur-[55px]" style={{ animation: 'aurora 18s ease-in-out infinite reverse' }} />
-          <div className="absolute top-[15%] -right-[10%] h-[55%] w-[50%] rounded-full bg-[#2fd9bd] opacity-80 blur-[50px]" style={{ animation: 'aurora 11s ease-in-out infinite' }} />
-          <div className="absolute inset-0 bg-[linear-gradient(165deg,rgba(255,255,255,0.18),transparent_35%,rgba(0,0,0,0.25))]" />
-          <div className="absolute inset-0 rounded-[30px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]" />
-        </div>
-
         <div className="flex items-center justify-between text-white/80">
-          <span className="text-[15px] font-medium">Итог за {monthName(new Date())}</span>
+          <span className="text-[15px] font-medium">Итог за {monthName(period)}</span>
           <span className="rounded-full bg-white/15 px-2.5 py-1 text-[12px] font-medium backdrop-blur">EUR</span>
         </div>
 
-        <p ref={balance} className="num mt-3 whitespace-nowrap font-display text-[44px] leading-none font-semibold tracking-[-0.035em] text-white">
+        <p ref={balance} className="num mt-2 whitespace-nowrap font-display text-[36px] leading-none font-semibold tracking-[-0.035em] text-white">
           {m.sign}
           {m.int}
           <span className="text-[0.59em] text-white/60">,{m.frac} €</span>
         </p>
 
-        <div className="-mx-1 mt-2 h-16">
+        <div className="-mx-1 mt-1 h-11">
           <Sparkline data={spark} color="#ffffff" />
         </div>
 
@@ -83,28 +58,27 @@ export function Home({ nav }: { nav: Nav }) {
   const clients = useStore((s) => s.clients)
   const cats = useStore((s) => s.categories)
 
-  const month = useMemo(() => byPeriod(ops, 'month'), [ops])
+  const [offset, setOffset] = useState(0)
+  const today = new Date()
+  const period = new Date(today.getFullYear(), today.getMonth() + offset, 1)
+  const month = useMemo(() => byPeriod(ops, 'month', period), [ops, offset, today.getMonth(), today.getFullYear()])
   const t = useMemo(() => totals(month), [month])
-  const spark = useMemo(() => dailyCumulative(ops), [ops])
-  const topClients = useMemo(
-    () => groupSum(month.filter((o) => o.type === 'income'), (o) => o.clientId).slice(0, 6),
-    [month],
-  )
+  const spark = useMemo(() => dailyCumulative(ops.filter((o) => Date.parse(o.date) <= +today), offset === 0 ? today : new Date(period.getFullYear(), period.getMonth() + 1, 0)), [ops, offset, today.getDate()])
   const recent = ops.slice(0, 6)
 
   return (
     <>
       <header className="pt-safe flex items-center justify-between px-5 pb-5">
         <div>
-          <p className="text-[15px] text-mist">{greeting()}</p>
-          <h1 className="font-display text-[30px] leading-tight font-semibold tracking-[-0.02em]">{cap(monthName(new Date()))}</h1>
+          <p className="text-[14px] text-mist">{today.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+          <div className="mt-1 flex items-center gap-2"><button aria-label="Предыдущий месяц" onClick={() => setOffset((n) => n - 1)} className="glass press h-11 w-9 rounded-xl">‹</button><h1 className="text-[20px] font-semibold">{cap(monthName(period))} {period.getFullYear()}</h1><button aria-label="Следующий месяц" onClick={() => setOffset((n) => n + 1)} className="glass press h-11 w-9 rounded-xl">›</button></div>
         </div>
         <IconButton label="Настройки" onClick={nav.openSettings}>
           <Settings2 size={20} />
         </IconButton>
       </header>
 
-      <BalanceCard net={t.net} income={t.income} expense={t.expense} spark={spark} />
+      <BalanceCard net={t.net} income={t.income} expense={t.expense} spark={spark} period={period} />
 
       {/* Primary entry points — sized for the thumb. */}
       <div className="mt-4 grid grid-cols-2 gap-3 px-4">
@@ -112,34 +86,14 @@ export function Home({ nav }: { nav: Nav }) {
           { label: 'Доход', Icon: ArrowDownLeft, mode: 'income' as const, color: 'text-income', surface: 'bg-income/10 ring-income/20' },
           { label: 'Расход', Icon: ArrowUpRight, mode: 'expense' as const, color: 'text-expense', surface: 'bg-expense/10 ring-expense/20' },
         ].map((a) => (
-          <button key={a.mode} onClick={() => nav.openAdd(a.mode)} className={`press flex min-h-[104px] items-center justify-center gap-3 rounded-[24px] ring-1 ring-inset ${a.surface} ${a.color}`}>
-            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/5"><a.Icon size={26} strokeWidth={2} /></span>
+          <button key={a.mode} onClick={() => nav.openAdd(a.mode)} style={{ background: `linear-gradient(135deg,${a.mode === 'income' ? 'rgba(63,224,197,.13)' : 'rgba(255,107,129,.13)'},rgba(255,255,255,.025))` }} className={`press flex glass min-h-[56px] items-center justify-center gap-3 rounded-[20px] ring-1 ring-inset ${a.surface} ${a.color}`}>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/5"><a.Icon size={24} strokeWidth={2} /></span>
             <span className="text-[18px] font-semibold">{a.label}</span>
           </button>
         ))}
       </div>
 
-      {topClients.length > 0 && (
-        <section className="mt-7">
-          <div className="mb-3 flex items-baseline justify-between px-5">
-            <h2 className="text-[20px] font-semibold">Клиенты месяца</h2>
-            <button onClick={() => nav.goTab('clients')} className="text-[15px] text-iris">Все</button>
-          </div>
-          <div className="no-scrollbar flex gap-2.5 overflow-x-auto px-4 pb-1">
-            {topClients.map(([id, sum]) => {
-              const c = clients.find((x) => x.id === id)
-              if (!c) return null
-              return (
-                <button key={id} onClick={() => nav.openClient(id)} className="glass press flex w-[132px] shrink-0 flex-col items-start rounded-[22px] p-3.5">
-                  <Avatar client={c} size={40} />
-                  <p className="mt-3 w-full truncate text-left text-[15px] font-medium">{c.name}</p>
-                  <p className="num text-[15px] font-semibold text-income">+{fmtShort(sum)}</p>
-                </button>
-              )
-            })}
-          </div>
-        </section>
-      )}
+      <div className="mt-4 px-4"><MoneySummary onSetup={() => { nav.goTab('planning') }} /></div>
 
       {recent.length === 0 && (
         <Card className="mx-4 mt-7">
