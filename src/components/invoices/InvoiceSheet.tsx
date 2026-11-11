@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Ban, Check, ChevronRight, Copy, FilePlus2, FileText, Plus, Search, Share2, Trash2, Undo2, UserPlus, Wallet, X } from 'lucide-react'
 import { getState, uid, useStore } from '../../lib/store'
 import { toast } from '../../lib/toast'
@@ -12,6 +12,7 @@ import {
 import { STATUS_COLOR, STATUS_LABEL, computeTotals, displayStatus, formatCode, formatIban, lastIssued, lineAmount, localDay, moneyInput, parseMoney, parseQuantity, parseRate, quantityLabel, rateLabel, taxIdKind, validIban } from '../../lib/invoicing'
 import { Avatar, Card, PrimaryButton, Sheet } from '../ui'
 import { Field } from './Field'
+import { suggestServices, usedServices, type ServiceName } from '../../lib/service-suggestions'
 import { ClientTaxSheet } from './ClientTaxSheet'
 import { InvoicingSettingsSheet, IssuersSheet } from './InvoiceSettingsSheets'
 
@@ -65,23 +66,52 @@ function ClientPicker({ open, onClose, onPick, onNew }: { open: boolean; onClose
 
 /* ---------------- line editor ---------------- */
 
-function LineRow({ line, onChange, onRemove, canRemove }: { line: InvoiceLine; onChange: (l: InvoiceLine) => void; onRemove: () => void; canRemove: boolean }) {
+function LineRow({ line, onChange, onRemove, canRemove, services }: { line: InvoiceLine; onChange: (l: InvoiceLine) => void; onRemove: () => void; canRemove: boolean; services: ServiceName[] }) {
   const [qty, setQty] = useState(quantityLabel(line.quantity))
   const [price, setPrice] = useState(line.unitPrice ? moneyInput(line.unitPrice) : '')
+  const [open, setOpen] = useState(false)
+  const priceRef = useRef<HTMLInputElement>(null)
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
   const qErr = qty.trim() && parseQuantity(qty) === null
   const pErr = price.trim() && parseMoney(price) === null
+  // previously used service names: all of them on an empty field, filtered while typing
+  const options = open ? suggestServices(services, line.description) : []
+  const pick = (name: string) => {
+    onChange({ ...line, description: name })
+    clearTimeout(closeTimer.current)
+    setOpen(false)
+    // the price differs per client: never filled in, the cursor moves there instead
+    priceRef.current?.focus()
+  }
   return (
     <div className="glass space-y-2 rounded-[22px] p-3">
       <div className="flex gap-2">
-        <textarea value={line.description} rows={2} maxLength={1000} onChange={(e) => onChange({ ...line, description: e.target.value })} placeholder="Описание услуги" className="min-h-14 min-w-0 flex-1 resize-none rounded-xl bg-white/5 px-3 py-2.5 text-[16px] outline-none placeholder:text-fog" />
+        <textarea value={line.description} rows={2} maxLength={1000} aria-label="Описание услуги" aria-autocomplete="list" aria-expanded={!!options.length}
+          onFocus={() => { clearTimeout(closeTimer.current); setOpen(true) }} onBlur={() => { closeTimer.current = setTimeout(() => setOpen(false), 180) }}
+          onChange={(e) => { onChange({ ...line, description: e.target.value }); setOpen(true) }}
+          placeholder="Описание услуги" className="min-h-14 min-w-0 flex-1 resize-none rounded-xl bg-white/5 px-3 py-2.5 text-[16px] outline-none placeholder:text-fog" />
         {canRemove && <button aria-label="Удалить строку" onClick={onRemove} className="press grid h-10 w-10 shrink-0 place-items-center rounded-xl text-fog"><Trash2 size={18} /></button>}
       </div>
+      {!!options.length && (
+        <div role="listbox" aria-label="Ранее использованные услуги" className="anim-fade overflow-hidden rounded-xl bg-white/6">
+          {options.map((name) => (
+            <button key={name} type="button" role="option" aria-selected="false"
+              // keep the keyboard open until the choice is made (iOS fires blur before click)
+              onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(name)}
+              className="press block w-full truncate border-b border-line px-3 py-2.5 text-left text-[15px] last:border-b-0">
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-[1fr_1.4fr_1.4fr] items-end gap-2">
         <label className="block"><span className="px-1 text-[12px] text-mist">Кол-во</span>
           <input value={qty} inputMode="decimal" onChange={(e) => { setQty(e.target.value); const v = parseQuantity(e.target.value); if (v !== null) onChange({ ...line, quantity: v }) }} className={`num h-11 w-full rounded-xl bg-white/5 px-3 text-[16px] outline-none ${qErr ? 'ring-1 ring-expense/70' : ''}`} />
         </label>
         <label className="block"><span className="px-1 text-[12px] text-mist">Цена, €</span>
-          <input value={price} inputMode="decimal" placeholder="0,00" onChange={(e) => { setPrice(e.target.value); const v = parseMoney(e.target.value); onChange({ ...line, unitPrice: v ?? 0 }) }} className={`num h-11 w-full rounded-xl bg-white/5 px-3 text-[16px] outline-none placeholder:text-fog ${pErr ? 'ring-1 ring-expense/70' : ''}`} />
+          <input ref={priceRef} value={price} inputMode="decimal" placeholder="0,00" onChange={(e) => { setPrice(e.target.value); const v = parseMoney(e.target.value); onChange({ ...line, unitPrice: v ?? 0 }) }} className={`num h-11 w-full rounded-xl bg-white/5 px-3 text-[16px] outline-none placeholder:text-fog ${pErr ? 'ring-1 ring-expense/70' : ''}`} />
         </label>
         <p className="num h-11 truncate pt-3 text-right text-[16px] font-semibold">{fmt(lineAmount(line))}</p>
       </div>
@@ -117,7 +147,6 @@ function Preview({ inv, code }: { inv: Invoice; code: string }) {
           <p className="text-[15px] font-bold text-indigo-600">{inv.rectifiesId ? 'FACTURA RECTIFICATIVA' : 'FACTURA'}</p>
           <p>Nº <b>{code}</b></p>
           <p>Fecha: <b>{day(inv.issueDate)}</b></p>
-          {inv.dueDate && <p>Vencimiento: <b>{day(inv.dueDate)}</b></p>}
         </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3">{block('EMISOR', issuer)}{block('CLIENTE', party)}</div>
@@ -205,7 +234,7 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
   useEffect(() => {
     if (!open) return
     const base = stored && stored.status === 'draft' ? stored : !invoiceId ? newDraft({ clientId }) : null
-    setDraft(base ? { ...base, lines: base.lines.length ? base.lines : [newLine()] } : null)
+    setDraft(base ? { ...base, dueDate: null, lines: base.lines.length ? base.lines : [newLine()] } : null)
     if (base) setRates({ vat: String(base.vatRate / 100).replace('.', ','), irpf: String(base.irpfRate / 100).replace('.', ',') })
     setMode('edit')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -230,6 +259,7 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
   const issuers = issuersOf(invoicing)
   const totals = useMemo(() => inv ? (inv.totals ?? computeTotals(inv.lines, inv.vatRate, inv.irpfRate)) : null, [inv])
   const problems = draft ? issueProblems(draft) : []
+  const services = useMemo(() => usedServices(invoicesOf(invoicing)), [invoicing])
   if (!open) return null
   const set = (patch: Partial<Invoice>) => setDraft((d) => (d ? { ...d, ...patch } : d))
 
@@ -271,7 +301,7 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
           <Card className="p-5">
             <div className="flex items-center justify-between gap-3">
               <span className={`text-[14px] font-semibold ${STATUS_COLOR[ds]}`}>{STATUS_LABEL[ds]}</span>
-              <span className="text-[13px] text-mist">от {day(issuedView.issueDate)}{issuedView.dueDate ? ` · до ${day(issuedView.dueDate)}` : ''}</span>
+              <span className="text-[13px] text-mist">от {day(issuedView.issueDate)}</span>
             </div>
             <p className="num mt-2 font-display text-[32px] font-semibold tracking-[-0.03em]">{fmt(totals?.total ?? 0)}</p>
             <p className="truncate text-[14px] text-mist">{issuedView.client?.name}</p>
@@ -358,18 +388,16 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
           </section>
 
           {/* dates */}
-          <section className="grid grid-cols-2 gap-2">
+          <section>
             <label className="block"><span className="mb-1.5 block px-1 text-[13px] text-mist">Дата выставления</span>
               <input type="date" value={draft.issueDate} onChange={(e) => set({ issueDate: e.target.value })} className="glass h-14 w-full rounded-2xl px-3 outline-none" /></label>
-            <label className="block"><span className="mb-1.5 block px-1 text-[13px] text-mist">Оплатить до</span>
-              <input type="date" value={draft.dueDate ?? ''} onChange={(e) => set({ dueDate: e.target.value || null })} className="glass h-14 w-full rounded-2xl px-3 outline-none" /></label>
           </section>
 
           {/* lines */}
           <section className="space-y-2">
             <p className="px-1 text-[15px] font-medium text-mist">Услуги</p>
             {draft.lines.map((l) => (
-              <LineRow key={l.id} line={l} canRemove={draft.lines.length > 1}
+              <LineRow key={l.id} line={l} canRemove={draft.lines.length > 1} services={services}
                 onChange={(n) => set({ lines: draft.lines.map((x) => (x.id === n.id ? n : x)) })}
                 onRemove={() => set({ lines: draft.lines.filter((x) => x.id !== l.id) })} />
             ))}

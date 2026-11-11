@@ -2,11 +2,11 @@
 import type { Invoice, InvoiceLine, InvoiceSeries, InvoicingRecord, InvoicingSettings, IssuerProfile, PartySnapshot } from './invoice-types'
 import type { Client, Operation } from './types'
 import { actions, getDeviceId, getState, uid, waitForWrites } from './store'
-import { addDays, computeTotals, formatCode, lastIssued, localDay, parseNumberExample, taxIdKind } from './invoicing'
+import { computeTotals, formatCode, lastIssued, localDay, parseNumberExample, taxIdKind } from './invoicing'
 
 const now = () => new Date().toISOString()
 export const SETTINGS_ID = 'invoicing-settings'
-export const DEFAULT_SETTINGS: Omit<InvoicingSettings, 'createdAt' | 'updatedAt'> = { id: SETTINGS_ID, kind: 'settings', vatRate: 2100, irpfRate: 1500, applyIrpf: true, dueDays: 30 }
+export const DEFAULT_SETTINGS: Omit<InvoicingSettings, 'createdAt' | 'updatedAt'> = { id: SETTINGS_ID, kind: 'settings', vatRate: 2100, irpfRate: 0, applyIrpf: false, dueDays: 0 }
 
 /* ---------------- selectors (pure, take the live list) ---------------- */
 
@@ -106,9 +106,11 @@ export function newDraft(opts: { clientId?: string | null; issuerId?: string | n
   const today = localDay()
   return {
     id: uid('inv'), kind: 'invoice', status: 'draft', seriesId: series?.id ?? '', number: null, code: null,
-    issueDate: today, dueDate: st.dueDays ? addDays(today, st.dueDays) : null,
+    // invoices carry no payment due date
+    issueDate: today, dueDate: null,
     issuerId: issuer?.id ?? null, clientId: opts.clientId ?? null, lines: [newLine()],
-    vatRate: st.vatRate, irpfRate: st.applyIrpf ? st.irpfRate : 0, iban: issuer?.iban ?? '', notes: '', currency: 'EUR',
+    // IRPF always starts at 0 %; the user sets a retention per invoice when needed
+    vatRate: st.vatRate, irpfRate: 0, iban: issuer?.iban ?? '', notes: '', currency: 'EUR',
     createdAt: t, updatedAt: t, deletedAt: null,
   }
 }
@@ -164,7 +166,6 @@ export function issueProblems(inv: Invoice): string[] {
   if (lines.some((l) => !l.quantity)) out.push('Количество не может быть нулевым.')
   if (!inv.vatRate && !inv.vatNote?.trim()) out.push('IVA 0 %: укажите основание (exención или inversión del sujeto pasivo).')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(inv.issueDate)) out.push('Укажите дату выставления.')
-  if (inv.dueDate && inv.dueDate < inv.issueDate) out.push('Срок оплаты раньше даты выставления.')
   return out
 }
 
@@ -186,7 +187,7 @@ export async function issueInvoice(id: string) {
   const lines = inv.lines.filter((l) => l.description.trim() || l.unitPrice).map((l) => ({ ...l, description: l.description.trim() }))
   const t = now()
   const issued: Invoice = {
-    ...inv, status: 'issued', number, code: formatCode(series, number), lines, issuedAt: t,
+    ...inv, status: 'issued', number, code: formatCode(series, number), lines, issuedAt: t, dueDate: null,
     issuer: issuerSnapshot(issuer, inv.iban), client: clientSnapshot(client),
     totals: computeTotals(lines, inv.vatRate, inv.irpfRate), iban: (inv.iban ?? issuer.iban ?? '').trim(),
   }

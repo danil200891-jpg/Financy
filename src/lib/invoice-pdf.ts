@@ -94,7 +94,6 @@ export async function invoicePdf({ invoice: inv, issuer, client, rectifiesCode }
   const meta: [string, string][] = [
     ['Nº factura', inv.code ?? '—'],
     ['Fecha de expedición', day(inv.issueDate)],
-    ...(inv.dueDate ? [['Vencimiento', day(inv.dueDate)] as [string, string]] : []),
     ...(rectifiesCode ? [['Rectifica a', rectifiesCode] as [string, string]] : []),
   ]
   let my = y - 40

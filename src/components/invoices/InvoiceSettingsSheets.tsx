@@ -8,7 +8,7 @@ import { TAX_ID_LABEL, formatCode, lastIssued, formatIban, parseRate, rateLabel,
 import { logoDataUrl } from '../../lib/image'
 import { plural } from '../../lib/format'
 import { Card, PrimaryButton, Sheet } from '../ui'
-import { Field, Toggle } from './Field'
+import { Field } from './Field'
 
 /* ---------------- Мои реквизиты ---------------- */
 
@@ -152,15 +152,13 @@ export function InvoicingSettingsSheet({ open, onClose }: { open: boolean; onClo
   const [name, setName] = useState('')
   const [example, setExample] = useState('F-0001')
   const [vat, setVat] = useState(String(st.vatRate / 100).replace('.', ','))
-  const [irpf, setIrpf] = useState(String(st.irpfRate / 100).replace('.', ','))
-  const [due, setDue] = useState(String(st.dueDays))
   const add = () => {
     try { createSeries(name, example); setAdding(false); setName(''); toast('Серия создана') } catch (e) { toast((e as Error).message) }
   }
   const saveRates = () => {
-    const v = parseRate(vat); const i = parseRate(irpf); const d = Number(due)
-    if (v === null || i === null || !Number.isInteger(d) || d < 0 || d > 365) { toast('Проверьте ставки и срок оплаты.'); return }
-    saveSettings({ vatRate: v, irpfRate: i, dueDays: d })
+    const v = parseRate(vat)
+    if (v === null) { toast('Проверьте ставку IVA.'); return }
+    saveSettings({ vatRate: v })
     toast('Сохранено')
   }
   return (
@@ -187,14 +185,9 @@ export function InvoicingSettingsSheet({ open, onClose }: { open: boolean; onClo
         </section>
         <section className="space-y-3">
           <p className="px-1 text-[15px] font-medium text-mist">Налоги по умолчанию</p>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="IVA, %" value={vat} onChange={setVat} inputMode="decimal" maxLength={6} hint={parseRate(vat) !== null ? rateLabel(parseRate(vat)!) : undefined} />
-            <Field label="IRPF, %" value={irpf} onChange={setIrpf} inputMode="decimal" maxLength={6} />
-          </div>
-          <Toggle label="Удерживать IRPF" hint="Для клиентов-компаний и autónomos" checked={st.applyIrpf} onChange={(v) => saveSettings({ applyIrpf: v })} />
-          <Field label="Срок оплаты, дней" value={due} onChange={setDue} inputMode="numeric" maxLength={3} />
+          <Field label="IVA по умолчанию, %" value={vat} onChange={setVat} inputMode="decimal" maxLength={6} hint={parseRate(vat) !== null ? rateLabel(parseRate(vat)!) : undefined} />
           <PrimaryButton onClick={saveRates}>Сохранить</PrimaryButton>
-          <p className="px-1 pb-2 text-[12px] text-fog">Ставки подставляются в новые фактуры и меняются в каждой фактуре отдельно. Уточняйте ставки у своего gestor.</p>
+          <p className="px-1 pb-2 text-[12px] text-fog">IVA подставляется в новые фактуры. IRPF в каждой новой фактуре равен 0 % — при необходимости укажите удержание в самой фактуре. Уточняйте ставки у своего gestor.</p>
         </section>
       </div>
     </Sheet>

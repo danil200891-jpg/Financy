@@ -75,9 +75,8 @@ export const addDays = (day: string, n: number) => {
   return localDay(d)
 }
 
-/** Overdue is not stored: an issued invoice past its due date shows as overdue. */
-export function displayStatus(inv: Pick<Invoice, 'status' | 'dueDate'>, today = localDay()): DisplayStatus {
-  if (inv.status === 'issued' && inv.dueDate && inv.dueDate < today) return 'overdue'
+/** Invoices have no payment due date, so nothing is shown as overdue. */
+export function displayStatus(inv: Pick<Invoice, 'status'>): DisplayStatus {
   return inv.status
 }
 

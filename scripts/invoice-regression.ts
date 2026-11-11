@@ -15,6 +15,7 @@ import {
 } from '../src/lib/invoice-actions'
 import { computeTotals, displayStatus, parseNumberExample, taxIdKind, validIban } from '../src/lib/invoicing'
 import { recognizeClient } from '../src/lib/client-ocr'
+import { STARTER_SERVICES, suggestServices, usedServices } from '../src/lib/service-suggestions'
 import { invoicePdf } from '../src/lib/invoice-pdf'
 
 const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms))
@@ -91,6 +92,15 @@ export async function runInvoiceRegression() {
   const noTax = actions.addClient('Без реквизитов', '#3fe0c5')
   await waitForWrites()
 
+  // 3b. new invoices: no payment due date, IRPF 0 %; a manual IRPF is applied to the totals
+  const fresh = newDraft({ clientId: regular.id })
+  check(fresh.dueDate === null && fresh.irpfRate === 0, `new invoice defaults dueDate=${fresh.dueDate} irpf=${fresh.irpfRate}`)
+  const noIrpf = computeTotals([{ quantity: 100, unitPrice: 100000 }], 2100, 0)
+  const withIrpf = computeTotals([{ quantity: 100, unitPrice: 100000 }], 2100, 1500)
+  const seven = computeTotals([{ quantity: 100, unitPrice: 100000 }], 2100, 700)
+  check(noIrpf.irpf === 0 && noIrpf.total === 121000 && withIrpf.irpf === 15000 && withIrpf.total === 106000 && seven.irpf === 7000 && seven.total === 114000, 'IRPF totals')
+  pass('new invoice: no due date, IRPF 0 %; 0 / 7 / 15 % IRPF give 1210 / 1140 / 1060 € on 1000 € + 21 % IVA')
+
   // 4. drafts never consume numbers; issued numbers are consecutive
   const incomeBefore = totals(getState().operations).income
   const mk = async (desc: string, price = 50000, clientId = regular.id) => {
@@ -142,8 +152,8 @@ export async function runInvoiceRegression() {
   check(inv(b).status === 'void' && inv(b).code === 'F-0028', 'void lost its number')
   const d2 = await mk('Sesión D')
   check((await issueInvoice(d2)).code === 'F-0029', 'voided number reused')
-  check(displayStatus({ status: 'issued', dueDate: '2000-01-01' }) === 'overdue' && displayStatus({ status: 'paid', dueDate: '2000-01-01' }) === 'paid', 'overdue status')
-  pass('void keeps F-0028 taken, next is F-0029; overdue derived from the due date')
+  check(displayStatus({ status: 'issued' }) === 'issued' && displayStatus({ status: 'paid' }) === 'paid', 'status display')
+  pass('void keeps F-0028 taken, next is F-0029')
 
   // 8. rectifying invoice in its own series
   const r = rectifyingDraft(c)
@@ -190,7 +200,31 @@ export async function runInvoiceRegression() {
   check(bad.fields.taxId === '12345678A' && bad.taxIdInvalid, 'invalid NIF not flagged')
   pass('client recognition fills only found fields, flags a NIF with a wrong control letter, invents nothing')
 
+  // 11b. previously used services: unique, most used first, names only, kept after a restart
+  for (const name of ['видеосъёмка  ', 'Монтаж ролика', 'Видеосъёмка']) {
+    const x = newDraft({ clientId: regular.id })
+    await saveDraft({ ...x, lines: [{ id: `s-${name}`, description: name, quantity: 100, unitPrice: 12345 }] })
+  }
+  let used = usedServices(invoicesOf(getState().all.invoicing))
+  const video = used.filter((u) => u.name.toLowerCase().replace(/\s+/g, ' ').trim() === 'видеосъёмка')
+  check(video.length === 1 && video[0].count === 2, `duplicate service names ${JSON.stringify(used.map((u) => u.name))}`)
+  check(used[0].name.toLowerCase().startsWith('видеосъёмка'), `most used service is not first: ${used.map((u) => u.name).join(', ')}`)
+  check(used.every((u) => Object.keys(u).sort().join() === 'count,lastUsed,name'), 'service list stores more than names')
+  const all = suggestServices(used, '')
+  check(all[0].toLowerCase().startsWith('видеосъёмка') && all.includes('Монтаж ролика') && STARTER_SERVICES.every((s) => all.some((n) => n.toLowerCase() === s.toLowerCase())), 'empty field does not list services')
+  check(suggestServices(used, 'smm')[0] === 'SMM и продвижение социальных сетей' && suggestServices(used, 'мон').join() === 'Монтаж ролика', 'typing does not filter the list')
+  check(!suggestServices(used, 'Монтаж ролика').length, 'exact name offered again')
+  await actions.reload()
+  used = usedServices(invoicesOf(getState().all.invoicing))
+  check(used.some((u) => u.name === 'Монтаж ролика'), 'services lost after reload')
+  pass('services: one entry per name (case/spaces), most used first, filter while typing, starters included, names only, kept after reload')
+
   // 12. PDF: valid document, long invoices paginate, Cyrillic/Spanish text and € render
+  // IRPF entered by hand on one invoice is frozen into its totals
+  const manual = newDraft({ clientId: regular.id })
+  await saveDraft({ ...manual, irpfRate: 700, lines: [{ id: 'm1', description: 'Видеосъёмка', quantity: 100, unitPrice: 100000 }] })
+  const manualIssued = await issueInvoice(manual.id)
+  check(manualIssued.totals!.irpf === 7000 && manualIssued.totals!.total === 114000 && manualIssued.dueDate === null, 'manual IRPF not applied to the issued invoice')
   const issued = inv(a)
   const bytes = await invoicePdf({ invoice: issued, issuer: issued.issuer!, client: issued.client! })
   check(new TextDecoder().decode(bytes.slice(0, 5)) === '%PDF-', 'not a PDF')
@@ -219,6 +253,19 @@ export async function runInvoiceRegression() {
   check(document.body.textContent?.includes('С фактурами'), 'no filter for clients with invoices')
   create.click(); await wait(300)
   check(document.querySelector('[role="dialog"]')?.textContent?.includes('Новая фактура'), 'invoice form did not open')
+  check(![...document.querySelectorAll('[role="dialog"] span')].some((n) => n.textContent === 'Оплатить до'), 'due date field still in the form')
+  const irpfInput = [...document.querySelectorAll<HTMLLabelElement>('[role="dialog"] label')].find((l) => l.textContent?.startsWith('IRPF'))?.querySelector('input')
+  check(irpfInput?.value === '0', `IRPF field shows ${irpfInput?.value}`)
+  const desc = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea[aria-label="Описание услуги"]')!
+  desc.focus(); desc.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); await wait(60)
+  const list = () => [...document.querySelectorAll('[role="listbox"] [role="option"]')].map((n) => n.textContent)
+  check(list().length >= 3 && list()[0]?.toLowerCase().startsWith('видеосъёмка'), `dropdown on empty field: ${list().join(' | ')}`)
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(desc, 'мон')
+  desc.dispatchEvent(new Event('input', { bubbles: true })); await wait(60)
+  check(list().join() === 'Монтаж ролика', `dropdown not filtered: ${list().join(' | ')}`)
+  ;(document.querySelector('[role="listbox"] [role="option"]') as HTMLButtonElement).click(); await wait(60)
+  const price = [...document.querySelectorAll<HTMLInputElement>('[role="dialog"] input')].find((i) => i.placeholder === '0,00')!
+  check(desc.value === 'Монтаж ролика' && !document.querySelector('[role="listbox"]') && document.activeElement === price && price.value === '', 'picking a service did not fill the name, close the list and move to an empty price')
   check(!failures.length, `JavaScript errors: ${failures.join('; ')}`)
   pass('«Создать фактуру» sits above the unchanged navigation; «С фактурами» filter; form opens; no JS errors')
   return `All invoice regressions passed (${out.length})`
@@ -229,11 +276,10 @@ export async function samplePdfBase64() {
   const issuer = { name: 'Ana Test Fotografía', taxId: '12345678Z', address: 'Calle Mayor 12, 3º B', postalCode: '28013', city: 'Madrid', country: 'España', email: 'ana@example.com', phone: '+34 600 000 000', iban: 'ES91 2100 0418 4502 0005 1332', logo: null }
   const client = { name: 'Estudio Lumen S.L.', taxId: 'B12345674', address: 'Avenida Diagonal 100', postalCode: '08019', city: 'Barcelona', country: 'España', email: 'admin@lumen.example' }
   const lines = [
-    { id: '1', description: 'Sesión fotográfica corporativa (media jornada)', quantity: 100, unitPrice: 45000 },
-    { id: '2', description: 'Edición y retoque de 40 fotografías', quantity: 4000, unitPrice: 1250 },
-    { id: '3', description: 'Desplazamiento', quantity: 150, unitPrice: 3000 },
+    { id: '1', description: 'Видеосъёмка', quantity: 100, unitPrice: 45000 },
+    { id: '2', description: 'SMM и продвижение социальных сетей (ноябрь)', quantity: 100, unitPrice: 30000 },
   ]
-  const invoice: Invoice = { id: 'sample', kind: 'invoice', status: 'issued', seriesId: 's', number: 26, code: 'F-0026', issueDate: '2026-11-11', dueDate: '2026-12-11', issuerId: null, clientId: null, issuer, client, lines, vatRate: 2100, irpfRate: 1500, iban: issuer.iban, notes: 'Gracias por su confianza.', currency: 'EUR', totals: computeTotals(lines, 2100, 1500), issuedAt: new Date().toISOString(), createdAt: T, updatedAt: T }
+  const invoice: Invoice = { id: 'sample', kind: 'invoice', status: 'issued', seriesId: 's', number: 26, code: 'F-0026', issueDate: '2026-11-11', dueDate: null, issuerId: null, clientId: null, issuer, client, lines, vatRate: 2100, irpfRate: 0, iban: issuer.iban, notes: 'Gracias por su confianza.', currency: 'EUR', totals: computeTotals(lines, 2100, 0), issuedAt: new Date().toISOString(), createdAt: T, updatedAt: T }
   const bytes = await invoicePdf({ invoice, issuer, client })
   let s = ''
   for (const b of bytes) s += String.fromCharCode(b)
