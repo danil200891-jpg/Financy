@@ -108,7 +108,7 @@ export function OpRow({ op, cat, client, onClick, showDate }: {
 }) {
   const income = op.type === 'income'
   return (
-    <button onClick={onClick} className="press flex w-full items-center gap-3.5 px-4 py-3 text-left">
+    <button data-scroll-reveal="" onClick={onClick} className="press flex w-full items-center gap-3.5 px-4 py-3 text-left">
       {client ? <Avatar client={client} /> : <CategoryIcon cat={cat} />}
       <div className="min-w-0 flex-1">
         <p className="truncate text-[16px] font-medium">{op.title || cat?.name || (income ? 'Доход' : 'Расход')}</p>
@@ -126,7 +126,7 @@ export function OpRow({ op, cat, client, onClick, showDate }: {
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`glass rounded-[26px] ${className}`}>{children}</div>
+  return <div data-scroll-reveal="" className={`glass rounded-[26px] ${className}`}>{children}</div>
 }
 
 /** Bottom sheet with drag-to-dismiss on the grabber. */

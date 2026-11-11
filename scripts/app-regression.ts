@@ -551,6 +551,34 @@ export async function runAppRegression() {
   } finally { Date.now = realNow }
   console.log('PASS PWA update checks at startup, foreground, online and manual request; duplicate foreground events throttled')
 
+  const expenseFilter = actions.addCategory({ name: 'Synthetic month expense', type: 'expense', color: '#ff6b81', icon: 'tag' })
+  const incomeFilter = actions.addCategory({ name: 'Synthetic month income', type: 'income', color: '#3fe0c5', icon: 'tag' })
+  await waitForWrites()
+  await click('История', document.querySelector('nav')!)
+  const hasFilter = (name: string) => !!document.querySelector(`button[aria-label="Фильтр категории ${name}"]`)
+  const monthText = (date: Date) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`
+  check(!hasFilter(expenseFilter.name) && !hasFilter(incomeFilter.name), 'Unused history filters remain visible')
+  const filterExpense = actions.addOperation({ ...draft('Synthetic filter expense', 500), categoryId: expenseFilter.id })
+  const filterIncome = actions.addOperation({ ...draft('Synthetic filter income', 800, 'income'), categoryId: incomeFilter.id, date: previousMonth.toISOString() })
+  await waitForWrites(); await wait()
+  check(hasFilter(expenseFilter.name) && !hasFilter(incomeFilter.name), 'Current month filters include another month or omit new expense')
+  await click('Доходы')
+  check(!hasFilter(expenseFilter.name), 'Expense category mixed into income filters')
+  await input('input[aria-label="Месяц истории"]', monthText(previousMonth))
+  check(hasFilter(incomeFilter.name) && !hasFilter(expenseFilter.name), 'Month switching did not rebuild filters')
+  await click('Фильтр категории ' + incomeFilter.name)
+  actions.updateOperation(filterIncome.id, { date: new Date().toISOString() }); await waitForWrites(); await wait()
+  check(!hasFilter(incomeFilter.name), 'Moved last operation left a stale category filter')
+  await input('input[aria-label="Месяц истории"]', monthText(new Date()))
+  check(hasFilter(incomeFilter.name), 'Moved category missing in destination month')
+  await click('Фильтр категории ' + incomeFilter.name)
+  actions.removeOperation(filterIncome.id); await waitForWrites(); await wait()
+  check(!hasFilter(incomeFilter.name), 'Deleted last operation left its filter selected/visible')
+  await click('Все'); actions.removeOperation(filterExpense.id); await waitForWrites(); await wait()
+  check(!hasFilter(expenseFilter.name) && getState().categories.some((c) => c.id === expenseFilter.id), 'Filtering removed category data or retained empty filter')
+  check(document.querySelector('nav')!.parentElement === document.body, 'Navigation remains inside a screen/container')
+  console.log('PASS monthly used-category filters, type separation, add/move/delete last operation, automatic selection reset, preserved categories and body-level navigation')
+
   const start = performance.now()
   const seed: Operation[] = Array.from({ length: 10000 }, (_, index) => ({
     ...draft(`Synthetic bulk ${index}`, 100 + index), id: `synthetic-bulk-${index}`,
@@ -560,6 +588,7 @@ export async function runAppRegression() {
   await actions.reload()
   console.log(`INFO 10000 synthetic records committed/reloaded in ${Math.round(performance.now() - start)} ms`)
   await click('История', document.querySelector('nav')!)
+  await click('Все месяцы')
   check([...document.querySelectorAll('button')].filter((node) => node.textContent?.includes('Synthetic bulk')).length < 101, 'History rendered all 10000 rows at once')
   await click('Показать ещё')
   check([...document.querySelectorAll('button')].filter((node) => node.textContent?.includes('Synthetic bulk')).length > 100, 'History pagination failed')
