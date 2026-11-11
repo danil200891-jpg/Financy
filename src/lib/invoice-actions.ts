@@ -169,7 +169,7 @@ export function parseRequestedNumber(seriesId: string, text: string, invoiceId?:
 /* ---------------- issuing ---------------- */
 
 export const issuerSnapshot = (i: IssuerProfile, iban?: string) => ({
-  name: i.name.trim(), taxId: i.taxId.trim(), address: i.address.trim(), postalCode: i.postalCode?.trim() || undefined, city: i.city?.trim() || undefined,
+  name: i.name.trim(), taxId: i.taxId.trim(), address: i.address.trim(), postalCode: i.postalCode?.trim() || undefined, city: i.city?.trim() || undefined, province: i.province?.trim() || undefined,
   country: i.country?.trim() || undefined, email: i.email?.trim() || undefined, phone: i.phone?.trim() || undefined, iban: (iban ?? i.iban)?.trim() || undefined, logo: i.logo ?? null,
 })
 export const clientSnapshot = (c: Client): PartySnapshot => ({

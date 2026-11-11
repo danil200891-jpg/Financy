@@ -23,6 +23,8 @@ export interface IssuerProfile extends InvoicingBase {
   address: string
   postalCode?: string
   city?: string
+  /** provincia, optional */
+  province?: string
   country?: string
   email?: string
   phone?: string

@@ -13,7 +13,7 @@ import { Field } from './Field'
 /* ---------------- Мои реквизиты ---------------- */
 
 type IssuerDraft = Omit<IssuerProfile, 'id' | 'kind' | 'createdAt' | 'updatedAt'> & { id?: string }
-const emptyIssuer = (): IssuerDraft => ({ label: '', name: '', taxId: '', address: '', postalCode: '', city: '', country: 'España', email: '', phone: '', iban: '', logo: null })
+const emptyIssuer = (): IssuerDraft => ({ label: '', name: '', taxId: '', address: '', postalCode: '', city: '', province: '', country: 'España', email: '', phone: '', iban: '', logo: null })
 
 export function IssuerEditor({ initial, onDone }: { initial: IssuerDraft; onDone: () => void }) {
   const [d, setD] = useState<IssuerDraft>(initial)
@@ -59,6 +59,7 @@ export function IssuerEditor({ initial, onDone }: { initial: IssuerDraft; onDone
         <Field label="Индекс" value={d.postalCode ?? ''} onChange={(v) => set({ postalCode: v })} inputMode="numeric" maxLength={20} />
         <Field label="Город" value={d.city ?? ''} onChange={(v) => set({ city: v })} maxLength={120} />
       </div>
+      <Field label="Провинция / область" value={d.province ?? ''} onChange={(v) => set({ province: v })} placeholder="Barcelona, Navarra, Madrid…" maxLength={120} />
       <Field label="Страна" value={d.country ?? ''} onChange={(v) => set({ country: v })} maxLength={80} />
       <Field label="Email" value={d.email ?? ''} onChange={(v) => set({ email: v })} inputMode="email" type="email" error={emailErr} maxLength={200} />
       <Field label="Телефон" value={d.phone ?? ''} onChange={(v) => set({ phone: v })} inputMode="tel" type="tel" maxLength={60} />

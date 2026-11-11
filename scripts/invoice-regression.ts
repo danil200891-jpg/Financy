@@ -10,7 +10,7 @@ import * as backup from '../src/lib/backup'
 import { totals } from '../src/lib/stats'
 import type { Invoice, InvoiceSeries } from '../src/lib/invoice-types'
 import {
-  autoNumber, createSeries, invoicesOf, issueInvoice, issueProblems, linkableOperations, parseRequestedNumber, markPaid, markUnpaid, newDraft, rectifyingDraft, saveDraft, saveIssuer,
+  autoNumber, clientSnapshot, createSeries, invoicesOf, issueInvoice, issueProblems, linkableOperations, parseRequestedNumber, markPaid, markUnpaid, newDraft, rectifyingDraft, saveDraft, saveIssuer,
   seriesOf, setSeriesStart, takeOverSeries, voidInvoice,
 } from '../src/lib/invoice-actions'
 import { computeTotals, displayStatus, parseNumberExample, taxIdKind, validIban } from '../src/lib/invoicing'
@@ -273,6 +273,28 @@ export async function runInvoiceRegression() {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await wait(150)
   const after = [...document.querySelectorAll<HTMLElement>('body > div')].filter((d) => d.querySelector(':scope > [role="dialog"]'))
   check(after.length === 1 && !after[0].hasAttribute('inert') && after[0].textContent?.includes('Новая фактура'), 'Escape closed more than the top sheet')
+  // client details: «Провинция / область» is in the manual form, saved, and filled in again later
+  const topD = () => [...document.querySelectorAll('[role="dialog"]')].filter((x) => !x.closest('[inert]')).pop()!
+  const tap = async (text: string) => { const b = [...topD().querySelectorAll('button')].find((x) => x.textContent?.includes(text)); check(b, `no button «${text}»`); b.click(); await wait(200) }
+  const fill = (label: string, value: string) => {
+    const el = [...topD().querySelectorAll('label')].find((l) => l.querySelector('span')?.textContent?.startsWith(label))?.querySelector('input')
+    check(el, `no field «${label}»`)
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  await tap('Выбрать клиента'); await tap('Новый клиент с реквизитами'); await tap('Заполнить вручную')
+  const labels = [...topD().querySelectorAll('label > span:first-child')].map((x) => x.textContent?.replace('проверьте', '').trim())
+  const iCity = labels.indexOf('Город'), iProv = labels.indexOf('Провинция / область')
+  check(iProv > 0 && iProv === iCity + 1, `province field missing or misplaced: ${labels.join(' | ')}`)
+  fill('Имя клиента', 'Txoko'); fill('Юридическое название', 'Bar Txoko S.L.'); fill('NIF', 'B12345674'); fill('Адрес', 'Calle Estafeta 3'); fill('Индекс', '31001'); fill('Город', 'Pamplona'); fill('Провинция', 'Navarra')
+  await wait(50); await tap('Сохранить реквизиты'); await waitForWrites(); await wait(200)
+  const tx = getState().clients.find((c) => c.name === 'Txoko')
+  check(tx?.province === 'Navarra' && tx.city === 'Pamplona', `province not saved: ${JSON.stringify(tx)}`)
+  check(topD().textContent?.includes('Txoko'), 'new client not selected in the invoice')
+  await tap('Изменить реквизиты клиента')
+  const provValue = [...topD().querySelectorAll('label')].find((l) => l.querySelector('span')?.textContent?.startsWith('Провинция'))?.querySelector('input')?.value
+  check(provValue === 'Navarra', `province not filled in again: ${provValue}`)
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await wait(200)
+  check(clientSnapshot(tx).province === 'Navarra', 'province not in the invoice copy of the client')
   const irpfInput = [...document.querySelectorAll<HTMLLabelElement>('[role="dialog"] label')].find((l) => l.textContent?.startsWith('IRPF'))?.querySelector('input')
   check(irpfInput?.value === '0', `IRPF field shows ${irpfInput?.value}`)
   const desc = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea[aria-label="Описание услуги"]')!
@@ -293,7 +315,7 @@ export async function runInvoiceRegression() {
 /** Sample PDF for a visual check (`INVOICE_PDF_OUT=file.pdf npm run test:invoices`). Synthetic data only. */
 export async function samplePdfBase64() {
   const issuer = { name: 'Ana Test Fotografía', taxId: '12345678Z', address: 'Calle Mayor 12, 3º B', postalCode: '28013', city: 'Madrid', country: 'España', email: 'ana@example.com', phone: '+34 600 000 000', iban: 'ES91 2100 0418 4502 0005 1332', logo: null }
-  const client = { name: 'Estudio Lumen S.L.', taxId: 'B12345674', address: 'Avenida Diagonal 100', postalCode: '08019', city: 'Barcelona', country: 'España', email: 'admin@lumen.example' }
+  const client = { name: 'Bar Txoko S.L.', taxId: 'B12345674', address: 'Calle Estafeta 3', postalCode: '31001', city: 'Pamplona', province: 'Navarra', country: 'España', email: 'admin@txoko.example' }
   const lines = [
     { id: '1', description: 'Видеосъёмка', quantity: 100, unitPrice: 45000 },
     { id: '2', description: 'SMM и продвижение социальных сетей (ноябрь)', quantity: 100, unitPrice: 30000 },
