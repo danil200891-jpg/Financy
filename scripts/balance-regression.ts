@@ -86,7 +86,9 @@ export async function balancePhase1() {
   ;[...document.querySelectorAll('button')].find((n) => n.getAttribute('aria-label') === 'Настройки')!.click(); await wait(300)
   const firstRow = [...document.querySelectorAll('.anim-push button')][1]
   const plain = (t?: string | null) => (t ?? '').replace(/[s  ]/g, '')
-  check(firstRow?.textContent?.includes('Корректировка фактического баланса') && plain(firstRow.textContent).includes('1400,00€'), `first Settings item: ${firstRow?.textContent}`)
+  check(firstRow?.textContent?.includes('Корректировка фактического баланса') && plain(firstRow.textContent).includes('1400,00€'), `balance Settings item: ${firstRow?.textContent}`)
+  const screenText = document.querySelector('.anim-push')?.textContent ?? ''
+  check(screenText.indexOf('Данные хранятся на этом устройстве') >= 0 && screenText.indexOf('Данные хранятся на этом устройстве') < screenText.indexOf('Корректировка фактического баланса'), 'storage card must come before the balance adjustment')
   ;(firstRow as HTMLButtonElement).click(); await wait(300)
   const dlg = () => [...document.querySelectorAll('[role="dialog"]')].filter((x) => !x.closest('[inert]')).pop()!
   check(dlg().textContent?.includes('Баланс в приложении') && plain(dlg().textContent).includes('1400,00€'), 'sheet does not show the app balance')
@@ -99,7 +101,7 @@ export async function balancePhase1() {
   check(balance() === 136000, `UI save ${balance()}`)
   check(dlg().textContent?.includes('История корректировок') && adjustments(getState().operations, getState().planning).length === 4, 'history not updated in the sheet')
   check(!failures.length, `JS errors: ${failures.join('; ')}`)
-  pass('Settings: first item, app balance, live difference −40 €, save, history updated; no JS errors')
+  pass('Settings: second item after storage card, app balance, live difference −40 €, save, history updated; no JS errors')
   return `phase 1: ${out.length} checks`
 }
 

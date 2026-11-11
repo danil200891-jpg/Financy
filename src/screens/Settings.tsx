@@ -252,15 +252,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
         </div>
 
         <div className="space-y-6 px-4">
-          <Card className="overflow-hidden">
-            <button onClick={() => setAdjust(true)} className="press flex w-full items-center gap-3.5 px-4 py-3.5 text-left">
-              <Scale size={20} className="text-iris" />
-              <span className="flex-1 text-[16px]">Корректировка фактического баланса</span>
-              <span className="num text-[13px] text-fog">{appBalance === null ? 'не указан' : fmt(appBalance)}</span>
-              <ChevronRight size={18} className="text-fog" />
-            </button>
-          </Card>
-
           <Card className="flex items-center gap-4 p-4">
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-income/12 text-income">
               <Database size={22} />
@@ -272,6 +263,15 @@ export function Settings({ onBack }: { onBack: () => void }) {
                 {usage ? `, ${usage}` : ''}
               </p>
             </div>
+          </Card>
+
+          <Card className="overflow-hidden">
+            <button onClick={() => setAdjust(true)} className="press flex w-full items-center gap-3.5 px-4 py-3.5 text-left">
+              <Scale size={20} className="text-iris" />
+              <span className="flex-1 text-[16px]">Корректировка фактического баланса</span>
+              <span className="num text-[13px] text-fog">{appBalance === null ? 'не указан' : fmt(appBalance)}</span>
+              <ChevronRight size={18} className="text-fog" />
+            </button>
           </Card>
 
           {groups.map((g, i) => (<Fragment key={g.group}>
