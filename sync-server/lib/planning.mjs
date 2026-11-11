@@ -8,7 +8,8 @@ export const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMo
 
 export function validPlanning(r) {
   if (!r || typeof r.id !== 'string' || !r.id || r.id.length > 120 || r.currency !== 'EUR' || !date(r.createdAt) || !date(r.updatedAt) || (r.deletedAt != null && !date(r.deletedAt))) return false
-  if (r.kind === 'balance') return cents(r.amount) && date(r.at)
+  // balance checkpoint: the real balance at `at`; `previous` = app balance just before (history only)
+  if (r.kind === 'balance') return cents(r.amount) && date(r.at) && (r.previous === undefined || r.previous === null || cents(r.previous)) && (r.name === undefined || (typeof r.name === 'string' && r.name.length <= 500))
   if (r.kind === 'settings') return typeof r.auto === 'boolean' && (r.order === undefined || ['obligations-first', 'priority'].includes(r.order))
   if (r.kind === 'movement') return cents(r.amount) && r.amount > 0 && ['pending', 'confirmed', 'rejected'].includes(r.status) &&
     (r.from === null || (typeof r.from === 'string' && r.from.length > 0 && r.from.length <= 120)) && (r.to === null || (typeof r.to === 'string' && r.to.length > 0 && r.to.length <= 120)) && r.from !== r.to

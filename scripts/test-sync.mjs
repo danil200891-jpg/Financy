@@ -263,6 +263,22 @@ try {
   await phone('api.sync()'); await pc('api.sync()')
   check((await pc('api.invList()')).some((i) => i.code === 'F-0027'), 'second invoice did not reach the PC')
   console.log('PASS invoices sync phone → PC; series issued from one device; server rejects a duplicate number')
+
+  // 11. balance corrections: reach the PC once, never applied twice, new operations move both balances
+  await phone('api.sync()'); await pc('api.sync()')
+  const b0 = await phone('api.balance()')
+  await phone(`api.balanceSet(${(b0 ?? 0) - 4000}, 'Комиссия банка')`)
+  await phone('api.sync()'); await pc('api.sync()')
+  check(await pc('api.balance()') === (b0 ?? 0) - 4000, 'correction did not reach the PC')
+  const serverBalances = () => Object.values(server.db.records).filter((r) => r.entity === 'planning' && r.data.kind === 'balance').length
+  const n1 = serverBalances()
+  await phone('api.forgetAcks()'); await phone('api.sync()'); await pc('api.sync()')
+  check(serverBalances() === n1 && (await pc('api.balanceHistory()')).length === (await phone('api.balanceHistory()')).length, 'resent correction duplicated')
+  check(await phone('api.balance()') === (b0 ?? 0) - 4000, 'resend applied the correction twice')
+  await pc(`api.add('Расход на ПК', 1000)`)
+  await pc('api.sync()'); await phone('api.sync()')
+  check(await phone('api.balance()') === await pc('api.balance()'), 'balances differ after a new operation')
+  console.log('PASS balance correction syncs phone → PC once; resend does not apply it twice; later operations move both balances equally')
   console.log('All sync regressions passed')
 } catch (e) {
   failed = true

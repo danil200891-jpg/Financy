@@ -21,7 +21,8 @@
     "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs sync-server/test/planning.test.mjs sync-server/test/invoicing.test.mjs",
     "sync-server": "node sync-server/server.mjs",
     "test:sync": "node scripts/test-sync.mjs",
-    "test:invoices": "node scripts/test-invoices.mjs"
+    "test:invoices": "node scripts/test-invoices.mjs",
+    "test:balance": "node scripts/test-balance.mjs"
   },
   "dependencies": {
     "@fontsource-variable/onest": "^5.3.1",

@@ -7,6 +7,7 @@ import { getDevice } from '../src/lib/sync/device'
 import { savePlan, savePlanWithReserve, closePlan, financials, reserve } from '../src/lib/planning'
 import { createSeries, invoicesOf, issueInvoice, issueProblems, newDraft, saveDraft, saveIssuer, seriesOf } from '../src/lib/invoice-actions'
 import type { Invoice } from '../src/lib/invoice-types'
+import { adjustments, currentBalance, saveAdjustment } from '../src/lib/balance-adjust'
 
 const draft = (title: string, amount: number) => ({
   title, amount, type: 'income' as const, currency: 'EUR', date: new Date().toISOString(), categoryId: 'c-work', clientId: null, source: 'manual' as const,
@@ -106,6 +107,9 @@ export const api = {
     await waitForWrites()
   },
   invoicingSupported: () => sync.getSyncStatus().invoicingSupported ?? false,
+  balanceSet: async (amount: number, reason: string) => { await saveAdjustment(amount, reason) },
+  balance: () => currentBalance(getState().operations, getState().planning),
+  balanceHistory: () => adjustments(getState().operations, getState().planning).map((a) => ({ id: a.id, after: a.after, diff: a.diff, reason: a.reason })),
   history: async (id: string) => (await DB.historyFor(id)).map((h) => ({ action: h.action, via: h.via ?? null })),
 }
 ;(window as unknown as { api: typeof api }).api = api

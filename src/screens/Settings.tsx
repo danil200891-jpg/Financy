@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  BadgeEuro, ChevronRight, Database, FileJson, Hash, FileSpreadsheet, FlaskConical, Plus, RotateCcw, Shapes, Trash2, Undo2, Upload, WifiOff,
+  BadgeEuro, ChevronRight, Scale, Database, FileJson, Hash, FileSpreadsheet, FlaskConical, Plus, RotateCcw, Shapes, Trash2, Undo2, Upload, WifiOff,
 } from 'lucide-react'
 import { actions, useStore, waitForWrites } from '../lib/store'
 import { exportCSV, exportJSON, getLastBackup, getPreRestore, parseBackup, restore, undoRestore, type Backup } from '../lib/backup'
@@ -12,6 +12,8 @@ import { useAppUpdate, applyUpdate, checkForUpdate } from '../lib/updates'
 import { SyncSection } from '../components/SyncSection'
 import { InvoicingSettingsSheet, IssuersSheet } from '../components/invoices/InvoiceSettingsSheets'
 import { issuersOf, seriesOf } from '../lib/invoice-actions'
+import { BalanceAdjustSheet } from '../components/BalanceAdjustSheet'
+import { currentBalance } from '../lib/balance-adjust'
 
 function AppUpdates() {
   const state = useAppUpdate()
@@ -152,6 +154,9 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const [trash, setTrash] = useState(false)
   const [issuers, setIssuers] = useState(false)
   const [numbering, setNumbering] = useState(false)
+  const [adjust, setAdjust] = useState(false)
+  const planning = useStore((s) => s.planning)
+  const appBalance = useMemo(() => currentBalance(ops, planning), [ops, planning])
   const invoicing = useStore((s) => s.invoicing)
   const [pending, setPending] = useState<Backup | null>(null)
   const [wipe, setWipe] = useState(false)
@@ -247,6 +252,15 @@ export function Settings({ onBack }: { onBack: () => void }) {
         </div>
 
         <div className="space-y-6 px-4">
+          <Card className="overflow-hidden">
+            <button onClick={() => setAdjust(true)} className="press flex w-full items-center gap-3.5 px-4 py-3.5 text-left">
+              <Scale size={20} className="text-iris" />
+              <span className="flex-1 text-[16px]">Корректировка фактического баланса</span>
+              <span className="num text-[13px] text-fog">{appBalance === null ? 'не указан' : fmt(appBalance)}</span>
+              <ChevronRight size={18} className="text-fog" />
+            </button>
+          </Card>
+
           <Card className="flex items-center gap-4 p-4">
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-income/12 text-income">
               <Database size={22} />
@@ -343,6 +357,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
       <CategoriesSheet open={cats} onClose={() => setCats(false)} />
       <TrashSheet open={trash} onClose={() => setTrash(false)} />
       <IssuersSheet open={issuers} onClose={() => setIssuers(false)} />
+      <BalanceAdjustSheet open={adjust} onClose={() => setAdjust(false)} />
       <InvoicingSettingsSheet open={numbering} onClose={() => setNumbering(false)} />
     </div>
   )

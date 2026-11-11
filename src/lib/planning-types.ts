@@ -8,6 +8,8 @@ export interface PlanningRecord {
   name?: string
   amount?: number
   at?: string
+  /** balance checkpoint only: balance shown by the app just before the correction (null = none yet) */
+  previous?: number | null
   target?: number
   mode?: 'goal' | 'obligation'
   frequency?: 'once' | 'monthly' | 'quarterly' | 'yearly'

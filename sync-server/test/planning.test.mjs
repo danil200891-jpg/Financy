@@ -88,3 +88,13 @@ test('server serializes reservations, rejects stale/insufficient commands and de
   assert.equal(backup.version, 3); assert(verifyBackup(backup)); assert.equal(backup.planning.length, 3)
   assert.equal(snapshot(db).planning.length, 3)
 })
+
+test('balance correction records: optional previous balance and reason are validated', () => {
+  const t = '2026-11-11T10:00:00.000Z'
+  const base = { id: 'bal-1', kind: 'balance', currency: 'EUR', createdAt: t, updatedAt: t, amount: 121000, at: t }
+  assert(validPlanning(base), 'legacy checkpoint without previous')
+  assert(validPlanning({ ...base, previous: 125000, name: 'Комиссия банка' }))
+  assert(validPlanning({ ...base, previous: null, name: '' }), 'first correction without a previous balance')
+  assert(!validPlanning({ ...base, previous: 12.5 }), 'fractional previous balance accepted')
+  assert(!validPlanning({ ...base, name: 'x'.repeat(501) }), 'over-long reason accepted')
+})
