@@ -112,18 +112,31 @@ button.press:not(.glass):not(.glass-strong):not(.glass-tint) {
 /* Every tab scrolls past the floating panel, including iPhone's home indicator. */
 .app-content { padding-bottom: var(--bottom-content-clearance); }
 .bottom-nav { padding-bottom: var(--bottom-nav-gap); }
-.glass-strong.bottom-nav-surface {
-  min-height: var(--bottom-nav-height);
+.bottom-nav-surface {
+  height: var(--bottom-nav-height);
   overflow: hidden;
-  isolation: isolate;
-  background: linear-gradient(135deg, rgba(255,255,255,.09), rgba(124,140,255,.025)), rgba(18,20,32,.56);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  backdrop-filter: blur(20px) saturate(140%);
-  border-color: rgba(220,225,255,.24);
+  background: transparent;
+  border: 1px solid rgba(220,225,255,.24);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.16), inset 0 -1px 0 rgba(124,140,255,.09);
+}
+/* Blur only the backdrop layer; keep labels sharp and avoid an isolated Safari backdrop. */
+.bottom-nav-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255,255,255,.065), rgba(124,140,255,.015)), rgba(18,20,32,.30);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .bottom-nav-surface::before { background: rgba(18,20,32,.9); }
 }
 
 .bottom-nav-item {
+  position: relative;
+  z-index: 1;
   color: #969caf;
   background: transparent;
   transition: color 180ms ease, opacity 160ms ease, transform 160ms var(--ease-spring);

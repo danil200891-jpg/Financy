@@ -19,7 +19,7 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         key={t.id}
         onClick={() => onTab(t.id)}
         aria-label={t.label}
-        className={`bottom-nav-item flex min-h-[64px] min-w-0 flex-1 flex-col items-center gap-1 pt-2 pb-1 transition-colors ${active ? 'text-ink' : 'text-fog'}`}
+        className={`bottom-nav-item flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-1 py-1 transition-colors ${active ? 'text-ink' : 'text-fog'}`}
         aria-current={active ? 'page' : undefined}
       >
         <t.Icon size={24} strokeWidth={active ? 2.2 : 1.8} />
@@ -29,7 +29,7 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   }
   return createPortal(
     <nav className="bottom-nav fixed inset-x-0 bottom-0 z-40 px-3">
-      <div className="glass-strong bottom-nav-surface relative mx-auto flex max-w-[520px] items-end rounded-[28px] px-1 pb-1.5">
+      <div className="bottom-nav-surface relative mx-auto flex max-w-[520px] items-stretch rounded-[28px] p-1">
         {TABS.map(item)}
       </div>
     </nav>, document.body
