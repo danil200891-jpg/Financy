@@ -16,13 +16,21 @@ export { ChevronLeft, ScanLine, ImageUp, Keyboard }
 
 let scrollLocks = 0
 let previousOverflow = ''
+let screenLock: { element: HTMLElement; overflow: string } | null = null
 export function lockBodyScroll() {
-  if (scrollLocks++ === 0) { previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden' }
+  if (scrollLocks++ === 0) {
+    previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'
+    const element = document.documentElement.classList.contains('standalone-app') ? document.querySelector<HTMLElement>('.app-content') : null
+    if (element) { screenLock = { element, overflow: element.style.overflow }; element.style.overflow = 'hidden' }
+  }
   let released = false
   return () => {
     if (released) return
     released = true
-    if (--scrollLocks === 0) document.body.style.overflow = previousOverflow
+    if (--scrollLocks === 0) {
+      document.body.style.overflow = previousOverflow
+      if (screenLock) { screenLock.element.style.overflow = screenLock.overflow; screenLock = null }
+    }
   }
 }
 

@@ -80,6 +80,35 @@ try {
   assert.equal(await js("document.querySelectorAll('nav button').length"), 5)
   assert.deepEqual(errors, [])
   console.log('PASS production browser startup, SW control and offline reload; no uncaught JavaScript errors')
+  await cdp('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+  await cdp('Page.addScriptToEvaluateOnNewDocument', { source: "Object.defineProperty(navigator,'standalone',{get:()=>true})" })
+  await cdp('Page.reload'); await until("document.documentElement.classList.contains('standalone-app') && !!document.querySelector('main')")
+  await js(`new Promise(resolve=>{const q=indexedDB.open('finance');q.onsuccess=()=>{const d=q.result,t=d.transaction(['operations','clients'],'readwrite'),now=new Date().toISOString();t.objectStore('clients').put({id:'standalone-client',name:'Synthetic standalone client',aliases:[],color:'#7c8cff',createdAt:now,updatedAt:now});for(let i=0;i<100;i++)t.objectStore('operations').put({id:'standalone-'+i,title:'Synthetic standalone operation',type:'expense',amount:100,currency:'EUR',date:now,categoryId:'c-food',clientId:null,source:'manual',createdAt:now,updatedAt:now});t.oncomplete=()=>{d.close();resolve(true)}}})`)
+  await cdp('Page.reload'); await until("!!document.querySelector('main')")
+  for (const [width,height] of [[320,667],[390,844]]) {
+    await cdp('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true})
+    let expectedTop
+    for (const tab of ['Главная','История','Клиенты','Планирование','Аналитика','Клиенты']) {
+      await js(`[...document.querySelectorAll('nav button')].find(b=>b.getAttribute('aria-label')===${JSON.stringify(tab)}).click()`)
+      await new Promise(r=>setTimeout(r,80))
+      assert.equal(await js("document.querySelector('main').scrollTop"),0,'New tab retained old screen scroll')
+      await js("document.querySelector('main').scrollTop=400;window.scrollTo(0,400)")
+      const layout = await js("(()=>{const r=document.querySelector('.bottom-nav-surface').getBoundingClientRect();return {root:document.scrollingElement.scrollHeight,scroll:scrollY,screen:document.querySelector('main').clientHeight,top:r.top}})()")
+      assert.equal(layout.root,height,`${tab}: root document changed height`)
+      assert.equal(layout.scroll,0,`${tab}: root WebView scrolled`)
+      assert.equal(layout.screen,height,`${tab}: screen no longer fills root`)
+      expectedTop ??= layout.top
+      assert.equal(layout.top,expectedTop,`${tab}: navigation moved`)
+    }
+  }
+  await js("document.querySelector('main').scrollTop=0;document.querySelector('button[aria-label=\"Добавить клиента\"]').click()")
+  await until("!!document.querySelector('[role=dialog]')")
+  assert.equal(await js("document.querySelector('main').style.overflow"),'hidden','Standalone modal did not lock screen scroll')
+  await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))")
+  await until("!document.querySelector('[role=dialog]')")
+  assert.equal(await js("document.querySelector('main').style.overflow"),'','Standalone screen lock was not released')
+  assert.deepEqual(errors, [])
+  console.log('PASS standalone root height/scroll remain invariant across five tabs, long/short content, mobile sizes and modal locking')
   await cdp('Browser.close')
 } finally {
   socket?.close()

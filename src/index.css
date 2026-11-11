@@ -111,6 +111,17 @@ button.press:not(.glass):not(.glass-strong):not(.glass-tint) {
 
 /* Every tab scrolls past the floating panel, including iPhone's home indicator. */
 .app-content { padding-bottom: var(--bottom-content-clearance); }
+/* Installed WebViews must not change root scroll bounds when a short tab replaces
+   a long one. Scroll only the screen, keeping the global viewport/navigation stable. */
+html.standalone-app, html.standalone-app body { height: 100%; overflow: hidden; }
+.standalone-app #root, .standalone-app .app-frame { height: 100%; min-height: 0; }
+.standalone-app .app-content {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scroll-padding-bottom: var(--bottom-content-clearance);
+}
+
 .bottom-nav { padding-bottom: var(--bottom-nav-gap); }
 .bottom-nav-surface {
   height: var(--bottom-nav-height);
