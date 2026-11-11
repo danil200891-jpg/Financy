@@ -17,7 +17,7 @@ import { backupDue, createBackup, listBackups, pruneBackups, readBackup } from '
 import { Pairing, Verifier, newDeviceId, validPublicJwk } from './lib/auth.mjs'
 import { Certs, findOpenssl, lanAddresses, localName } from './lib/tls.mjs'
 
-export const VERSION = '1.2.0'
+export const VERSION = '1.2.1'
 const here = dirname(fileURLToPath(import.meta.url))
 
 export function defaultHome() {
