@@ -17,7 +17,7 @@ import { backupDue, createBackup, listBackups, pruneBackups, readBackup } from '
 import { Pairing, Verifier, newDeviceId, validPublicJwk } from './lib/auth.mjs'
 import { Certs, findOpenssl, lanAddresses, localName } from './lib/tls.mjs'
 
-export const VERSION = '1.1.0'
+export const VERSION = '1.2.0'
 const here = dirname(fileURLToPath(import.meta.url))
 
 export function defaultHome() {
@@ -125,7 +125,7 @@ export async function startServer(opts = {}) {
     if (req.method === 'OPTIONS') return send(res, 204, '', h)
     try {
       if (path === '/ping' && req.method === 'GET')
-        return send(res, 200, { app: 'financy-sync', capabilities: ['planning-v2'], version: VERSION, serverId: config.serverId, name: config.serverName, hosts: hosts(), time: Date.now() }, h)
+        return send(res, 200, { app: 'financy-sync', capabilities: ['planning-v2', 'invoicing-v1'], version: VERSION, serverId: config.serverId, name: config.serverName, hosts: hosts(), time: Date.now() }, h)
 
       if (path === '/pair' && req.method === 'POST') {
         const body = parse(await readBody(req, 64 * 1024))
@@ -177,7 +177,7 @@ export async function startServer(opts = {}) {
         const since = Math.max(0, Number(url.searchParams.get('since')) || 0)
         const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 500))
         touch()
-        return send(res, 200, { ...pull(db, since, limit, url.searchParams.get('planning') === '2'), serverId: config.serverId }, h)
+        return send(res, 200, { ...pull(db, since, limit, url.searchParams.get('planning') === '2', url.searchParams.get('invoicing') === '1'), serverId: config.serverId }, h)
       }
       if (path === '/sync/status' && req.method === 'GET') {
         return send(res, 200, {
@@ -194,9 +194,14 @@ export async function startServer(opts = {}) {
       if (path === '/backups' && req.method === 'GET') return send(res, 200, { backups: listBackups(config.backupDir), dir: config.backupDir }, h)
       if (path === '/backups/file' && req.method === 'GET') {
         const backup = readBackup(config.backupDir, String(url.searchParams.get('name') ?? ''))
-        if (url.searchParams.get('planning') === '2') return send(res, 200, backup, h)
-        // An old app can still restore its known data. Never expose unknown record kinds.
-        const { planning: _planning, integrity: _integrity, ...legacy } = backup
+        if (url.searchParams.get('invoicing') === '1') return send(res, 200, backup, h)
+        // An older app can still restore its known data. Never expose record kinds it does not know.
+        if (url.searchParams.get('planning') === '2') {
+          const { invoicing: _inv, integrity: _i, ...known } = backup
+          known.version = 2
+          return send(res, 200, { ...known, integrity: { algorithm: 'sha256', hash: sha256(canonical(known)) } }, h)
+        }
+        const { planning: _planning, invoicing: _invoicing, integrity: _integrity, ...legacy } = backup
         legacy.version = 1
         return send(res, 200, { ...legacy, integrity: { algorithm: 'sha256', hash: sha256(canonical(legacy)) } }, h)
       }

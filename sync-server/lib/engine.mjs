@@ -9,6 +9,7 @@
 //     conflict: the newer edit is kept (an edit always beats a deletion) and BOTH versions are saved
 //     in `conflicts` for the user to review. Nothing is silently lost.
 import { movementError } from './planning.mjs'
+import { numberClash } from './invoicing.mjs'
 import { canonical, hashRecord } from './canonical.mjs'
 import { ENTITIES, validRecord } from './records.mjs'
 
@@ -96,6 +97,10 @@ export function applyPush(input, deviceId, changes, now = new Date().toISOString
       results.push({ key, status: 'rejected', reason: 'invalid' }); continue
     }
     if (hashRecord(data) !== hash) { results.push({ key, status: 'rejected', reason: 'integrity' }); continue }
+    // an invoice number may exist only once per series, whatever device issued it
+    if (entity === 'invoicing' && numberClash(Object.values(db.records).filter((r) => r.entity === 'invoicing').map((r) => r.data), data)) {
+      results.push({ key, status: 'rejected', reason: 'duplicate-number' }); continue
+    }
     const cur = db.records[key]
     if (!cur) { const r = store(entity, id, data); results.push({ key, status: 'accepted', rev: r.rev, hash: r.hash }); continue }
     if (cur.hash === hash) { results.push({ key, status: 'same', rev: cur.rev, hash: cur.hash }); continue }
@@ -134,8 +139,8 @@ export function applyPush(input, deviceId, changes, now = new Date().toISOString
 }
 
 /** Records changed after `since`, oldest first, in pages. */
-export function pull(db, since = 0, limit = 500, planning = true) {
-  const all = Object.values(db.records).filter((r) => r.rev > since && (planning || r.entity !== 'planning')).sort((a, b) => a.rev - b.rev)
+export function pull(db, since = 0, limit = 500, planning = true, invoicing = true) {
+  const all = Object.values(db.records).filter((r) => r.rev > since && (planning || r.entity !== 'planning') && (invoicing || r.entity !== 'invoicing')).sort((a, b) => a.rev - b.rev)
   const page = all.slice(0, limit)
   return {
     records: page.map(({ entity, id, rev, hash, data }) => ({ entity, id, rev, hash, data })),
@@ -163,8 +168,8 @@ export function resolveConflict(input, id, now = new Date().toISOString()) {
 
 /** Live and deleted records grouped like the app's JSON backup. */
 export function snapshot(db) {
-  const out = { operations: [], clients: [], categories: [], planning: [] }
-  const name = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning' }
+  const out = { operations: [], clients: [], categories: [], planning: [], invoicing: [] }
+  const name = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning', invoicing: 'invoicing' }
   for (const r of Object.values(db.records)) out[name[r.entity]].push(r.data)
   for (const list of Object.values(out)) list.sort((a, b) => a.id.localeCompare(b.id))
   return out

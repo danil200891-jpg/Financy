@@ -20,12 +20,13 @@ const stamp = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDat
 export function buildBackup(db, kind, now = new Date()) {
   const data = snapshot(db)
   const body = {
-    app: 'finance-pwa', version: 2, createdBy: CREATED_BY, kind, exportedAt: now.toISOString(), serverId: db.serverId,
+    app: 'finance-pwa', version: 3, createdBy: CREATED_BY, kind, exportedAt: now.toISOString(), serverId: db.serverId,
     counts: {
       operations: data.operations.filter((o) => !o.deletedAt).length,
       clients: data.clients.filter((c) => !c.deletedAt).length,
       categories: data.categories.filter((c) => !c.deletedAt).length,
       deleted: data.operations.filter((o) => o.deletedAt).length,
+      invoices: data.invoicing.filter((r) => r.kind === 'invoice' && !r.deletedAt).length,
     },
     ...data,
     history: [],

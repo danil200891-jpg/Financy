@@ -25,6 +25,8 @@ export interface ServerBackup { file: string; kind: 'weekly' | 'manual' | 'pre-r
 export interface SyncStatus {
   paired: boolean
   planningSupported?: boolean
+  /** false when the PC runs an older Financy Sync: invoices then stay on this device until it is updated */
+  invoicingSupported?: boolean
   serverName: string | null
   phase: 'idle' | 'syncing' | 'offline' | 'error'
   reachable: boolean | null
@@ -36,7 +38,7 @@ export interface SyncStatus {
   rejected: number
 }
 
-const LISTS: Record<EntityKind, 'operations' | 'clients' | 'categories' | 'planning'> = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning' }
+const LISTS: Record<EntityKind, 'operations' | 'clients' | 'categories' | 'planning' | 'invoicing'> = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning', invoicing: 'invoicing' }
 const keyOf = (entity: EntityKind, id: string) => `${entity}:${id}`
 const BATCH = 400
 const BACKOFF = [10e3, 30e3, 60e3, 120e3, 300e3]
@@ -73,7 +75,7 @@ async function dirtyRecords(base: Base) {
 
 export async function countPending() {
   if (!status.paired) return 0
-  const n = (await dirtyRecords(await loadBase())).filter((r) => !(r.entity === 'planning' && 'kind' in r.data && r.data.kind === 'movement' && (r.data.status === 'rejected' || r.data.deletedAt))).length
+  const n = (await dirtyRecords(await loadBase())).filter((r) => (r.entity !== 'invoicing' || invoicingSupported) && !(r.entity === 'planning' && 'kind' in r.data && r.data.kind === 'movement' && (r.data.status === 'rejected' || r.data.deletedAt))).length
   setStatus({ pending: n })
   return n
 }
@@ -111,6 +113,8 @@ function explain(e: unknown) {
 
 let applying = false
 let planningSupported = false
+/** Invoices sync only with a server that knows them (Financy Sync 1.2+); older servers would reject them. */
+let invoicingSupported = false
 
 async function confirmMovements(device: PairedDevice, host: string) {
   const candidates = getState().planning.filter((r) => r.kind === 'movement' && r.status !== 'rejected').sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
@@ -145,7 +149,7 @@ async function confirmMovements(device: PairedDevice, host: string) {
 
 async function push(device: PairedDevice, host: string) {
   const base = await loadBase()
-  const dirty = (await dirtyRecords(base)).filter((r) => r.entity !== 'planning' || (planningSupported && !('kind' in r.data && r.data.kind === 'movement')))
+  const dirty = (await dirtyRecords(base)).filter((r) => (r.entity !== 'invoicing' || invoicingSupported) && (r.entity !== 'planning' || (planningSupported && !('kind' in r.data && r.data.kind === 'movement'))))
   let rejected = 0
   for (let i = 0; i < dirty.length; i += BATCH) {
     const batch = dirty.slice(i, i + BATCH)
@@ -193,9 +197,10 @@ async function applyRecords(items: { entity: EntityKind; data: AnyRecord; sentHa
 }
 
 async function pull(device: PairedDevice, host: string) {
-  let cursor = (await DB.getMeta<number>(planningSupported ? 'syncPlanningCursor' : 'syncCursor')) ?? 0
+  const cursorKey = invoicingSupported ? 'syncInvoicingCursor' : planningSupported ? 'syncPlanningCursor' : 'syncCursor'
+  let cursor = (await DB.getMeta<number>(cursorKey)) ?? 0
   for (let page = 0; page < 1000; page++) {
-    const res = await signed<{ records: RemoteRecord[]; cursor: number; more: boolean; serverId: string }>(device, host, 'GET', `/sync/pull?since=${cursor}&limit=500${planningSupported ? '&planning=2' : ''}`, undefined, 30000)
+    const res = await signed<{ records: RemoteRecord[]; cursor: number; more: boolean; serverId: string }>(device, host, 'GET', `/sync/pull?since=${cursor}&limit=500${planningSupported ? '&planning=2' : ''}${invoicingSupported ? '&invoicing=1' : ''}`, undefined, 30000)
     if (res.serverId !== device.serverId) throw new HttpError(409, 'other-server')
     const base = await loadBase()
     const toApply: { entity: EntityKind; data: AnyRecord; baseHash?: string }[] = []
@@ -221,7 +226,7 @@ async function pull(device: PairedDevice, host: string) {
     }
     cursor = res.cursor
     await DB.setMeta('syncBase', base)
-    await DB.setMeta(planningSupported ? 'syncPlanningCursor' : 'syncCursor', cursor)
+    await DB.setMeta(cursorKey, cursor)
     if (!res.more) break
   }
 }
@@ -249,7 +254,8 @@ export function syncNow(): Promise<void> {
       }
       const info = await ping(host)
       planningSupported = !!info.capabilities?.includes('planning-v2')
-      setStatus({ planningSupported })
+      invoicingSupported = !!info.capabilities?.includes('invoicing-v1')
+      setStatus({ planningSupported, invoicingSupported })
       await waitForWrites()
       const rejected = await push(device, host)
       await pull(device, host)
@@ -345,7 +351,7 @@ async function withServer<T>(fn: (d: PairedDevice, host: string) => Promise<T>) 
 export const listServerBackups = () => withServer(async (d, h) => (await signed<{ backups: ServerBackup[] }>(d, h, 'GET', '/backups')).backups)
 
 export async function fetchServerBackup(file: string) {
-  const b = await withServer((d, h) => signed<Record<string, unknown> & { integrity?: { hash: string } }>(d, h, 'GET', `/backups/file?name=${encodeURIComponent(file)}${planningSupported ? '&planning=2' : ''}`, undefined, 60000))
+  const b = await withServer((d, h) => signed<Record<string, unknown> & { integrity?: { hash: string } }>(d, h, 'GET', `/backups/file?name=${encodeURIComponent(file)}${planningSupported ? '&planning=2' : ''}${invoicingSupported ? '&invoicing=1' : ''}`, undefined, 60000))
   const { integrity, ...body } = b
   if (!integrity || (await sha256(canonical(body))) !== integrity.hash) throw new Error('Копия повреждена при передаче. Попробуйте ещё раз.')
   return b

@@ -1,4 +1,5 @@
 import type { PlanningRecord } from './planning-types'
+import type { InvoicingRecord } from './invoice-types'
 import { useSyncExternalStore } from 'react'
 import type { Category, Client, EntityKind, HistoryAction, HistoryEntry, Operation, FinancialRecord } from './types'
 import { buildDemoOperations, demoCategories, demoClients } from './demo'
@@ -20,7 +21,9 @@ export interface State {
   categories: Category[]
   /** every record including tombstones — used for backup */
   planning: PlanningRecord[]
-  all: { planning: PlanningRecord[]; operations: Operation[]; clients: Client[]; categories: Category[] }
+  /** live invoicing records (issuer profiles, series, settings, invoices) */
+  invoicing: InvoicingRecord[]
+  all: { planning: PlanningRecord[]; invoicing: InvoicingRecord[]; operations: Operation[]; clients: Client[]; categories: Category[] }
 }
 
 const live = <T extends { deletedAt?: string | null }>(xs: T[]) => xs.filter((x) => !x.deletedAt)
@@ -30,6 +33,7 @@ function derive(all: State['all']): State {
   return {
     ready: true,
     planning: live(all.planning),
+    invoicing: live(all.invoicing),
     all,
     operations: live(all.operations).sort(byDate),
     deleted: all.operations.filter((o) => o.deletedAt).sort((a, b) => (b.deletedAt ?? '').localeCompare(a.deletedAt ?? '')),
@@ -44,7 +48,7 @@ const catRank = (c: Category) => {
   return i < 0 ? 1000 : i
 }
 
-let state: State = { ready: false, operations: [], deleted: [], clients: [], categories: [], planning: [], all: { planning: [], operations: [], clients: [], categories: [] } }
+let state: State = { ready: false, operations: [], deleted: [], clients: [], categories: [], planning: [], invoicing: [], all: { planning: [], invoicing: [], operations: [], clients: [], categories: [] } }
 
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
@@ -65,10 +69,14 @@ export function useStore<T>(select: (s: State) => T): T {
 
 export const getState = () => state
 
+/** Stable id of this installation (not secret): a numbering series is issued from one device only. */
+let deviceId: string | null = null
+export const getDeviceId = () => deviceId ?? 'unknown'
+
 export const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 const nowIso = () => new Date().toISOString()
 
-const STORE: Record<EntityKind, DB.StoreName> = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning' }
+const STORE: Record<EntityKind, DB.StoreName> = { operation: 'operations', client: 'clients', category: 'categories', planning: 'planning', invoicing: 'invoicing' }
 
 function hist(entity: EntityKind, entityId: string, action: HistoryAction, before?: unknown, after?: unknown): HistoryEntry {
   return { id: uid('h'), entity, entityId, action, at: nowIso(), before, after }
@@ -130,7 +138,9 @@ export async function initStore() {
     await DB.setMeta('initialized', t)
     data.categories = [...data.categories, ...cats]
   }
-  setAll({ operations: data.operations, clients: data.clients, categories: data.categories, planning: data.planning })
+  setAll({ operations: data.operations, clients: data.clients, categories: data.categories, planning: data.planning, invoicing: data.invoicing })
+  deviceId = (await DB.getMeta<string>('deviceLocalId')) ?? null
+  if (!deviceId) { deviceId = uid('dev'); await DB.setMeta('deviceLocalId', deviceId).catch(() => {}) }
   await migrateIncomeCategories().catch(() => { /* retried on the next start; nothing is lost */ })
 }
 
@@ -185,6 +195,7 @@ export function findDuplicate(d: OperationDraft, ignoreId?: string) {
 }
 
 export const actions = {
+  saveInvoicing(record: InvoicingRecord) { write('invoicing', [record], [hist('invoicing', record.id, state.all.invoicing.some((r) => r.id === record.id) ? 'update' : 'create', state.all.invoicing.find((r) => r.id === record.id), record)]) },
   savePlanning(record: PlanningRecord) { write('planning', [record], [hist('planning', record.id, state.all.planning.some((r) => r.id === record.id) ? 'update' : 'create', state.all.planning.find((r) => r.id === record.id), record)]) },
   addOperation(d: OperationDraft) {
     const t = nowIso()
@@ -287,8 +298,8 @@ export const actions = {
     await waitForWrites()
     const t = nowIso()
     const cats = demoCategories.map((c) => ({ ...c, updatedAt: t, deletedAt: null }))
-    await DB.replaceAll({ operations: [], clients: [], categories: cats, history: [], planning: [] })
-    setAll({ operations: [], clients: [], categories: cats, planning: [] })
+    await DB.replaceAll({ operations: [], clients: [], categories: cats, history: [], planning: [], invoicing: [] })
+    setAll({ operations: [], clients: [], categories: cats, planning: [], invoicing: [] })
   },
 
   /**
@@ -330,6 +341,6 @@ export const actions = {
   /** Used by backup restore after the DB was rewritten. */
   async reload() {
     const data = await DB.loadAll()
-    setAll({ operations: data.operations, clients: data.clients, categories: data.categories, planning: data.planning })
+    setAll({ operations: data.operations, clients: data.clients, categories: data.categories, planning: data.planning, invoicing: data.invoicing })
   },
 }

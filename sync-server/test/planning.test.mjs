@@ -85,6 +85,6 @@ test('server serializes reservations, rejects stale/insufficient commands and de
   assert.equal(pull(db, 0, 500, false).records.length, 0)
   assert.equal(pull(db, 0, 500, true).records.length, 3)
   const backup = buildBackup(db, 'manual', now)
-  assert.equal(backup.version, 2); assert(verifyBackup(backup)); assert.equal(backup.planning.length, 3)
+  assert.equal(backup.version, 3); assert(verifyBackup(backup)); assert.equal(backup.planning.length, 3)
   assert.equal(snapshot(db).planning.length, 3)
 })

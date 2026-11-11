@@ -20,6 +20,8 @@ export interface Operation {
   date: string // ISO date-time
   note?: string
   incomeKind?: IncomeKind
+  /** set when this income is the payment of an invoice (one operation pays at most one invoice) */
+  invoiceId?: string | null
   source: OpSource
   createdAt: string
   updatedAt: string
@@ -44,14 +46,23 @@ export interface Client {
   aliases: string[]
   color: string
   note?: string
+  /** optional tax details, needed only for invoices; regular clients work without them */
+  legalName?: string
+  taxId?: string
+  address?: string
+  postalCode?: string
+  city?: string
+  country?: string
+  email?: string
+  phone?: string
   createdAt: string
   updatedAt?: string
   deletedAt?: string | null
 }
 
 export type HistoryAction = 'create' | 'update' | 'delete' | 'restore'
-export type EntityKind = 'operation' | 'client' | 'category' | 'planning'
-export type FinancialRecord = Operation | Client | Category | import('./planning-types').PlanningRecord
+export type EntityKind = 'operation' | 'client' | 'category' | 'planning' | 'invoicing'
+export type FinancialRecord = Operation | Client | Category | import('./planning-types').PlanningRecord | import('./invoice-types').InvoicingRecord
 
 /** Append-only change log. */
 export interface HistoryEntry {

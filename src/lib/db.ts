@@ -1,10 +1,12 @@
 import type { PlanningRecord } from './planning-types'
+import type { InvoicingRecord } from './invoice-types'
 import type { FinancialRecord } from './types'
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { Category, Client, HistoryEntry, Operation } from './types'
 
 interface FinanceDB extends DBSchema {
   planning: { key: string; value: PlanningRecord }
+  invoicing: { key: string; value: InvoicingRecord }
   operations: { key: string; value: Operation; indexes: { date: string } }
   clients: { key: string; value: Client }
   categories: { key: string; value: Category }
@@ -12,7 +14,7 @@ interface FinanceDB extends DBSchema {
   meta: { key: string; value: unknown }
 }
 
-export type StoreName = 'operations' | 'clients' | 'categories' | 'planning'
+export type StoreName = 'operations' | 'clients' | 'categories' | 'planning' | 'invoicing'
 
 let dbp: Promise<IDBPDatabase<FinanceDB>> | null = null
 const changeListeners = new Set<() => void>()
@@ -65,7 +67,7 @@ export function db() {
  *  - never delete/recreate an existing store, never clear data in a migration;
  *  - transform records in place via `tx.objectStore(...)` if a shape changes.
  */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 function open() {
   return openDB<FinanceDB>('finance', DB_VERSION, {
@@ -73,7 +75,7 @@ function open() {
         // a newer version of the app was opened in another tab — let it upgrade
         ;(ev.target as IDBDatabase).close()
       },
-      upgrade(d, oldVersion) {
+      upgrade(d, oldVersion, _newVersion, tx) {
         if (oldVersion < 1) {
           d.createObjectStore('operations', { keyPath: 'id' }).createIndex('date', 'date')
           d.createObjectStore('clients', { keyPath: 'id' })
@@ -84,36 +86,52 @@ function open() {
           d.createObjectStore('meta')
         }
         if (oldVersion < 2) d.createObjectStore('planning', { keyPath: 'id' })
+        if (oldVersion < 3) {
+          // Invoices get their own store; existing stores and records are not touched.
+          d.createObjectStore('invoicing', { keyPath: 'id' })
+          // Keep a full copy of the existing data (meta «preInvoicingV3»), queued in the same upgrade
+          // transaction. The upgrade only adds an empty store, so a failed copy (e.g. no space) must not
+          // lock the user out of their data: it is best effort.
+          if (oldVersion >= 1) {
+            void Promise.all([
+              tx.objectStore('operations').getAll(), tx.objectStore('clients').getAll(), tx.objectStore('categories').getAll(),
+              oldVersion >= 2 ? tx.objectStore('planning').getAll() : Promise.resolve([]), tx.objectStore('history').getAll(),
+            ]).then(([operations, clients, categories, planning, history]) => tx.objectStore('meta').put(
+              { app: 'finance-pwa', version: 2, exportedAt: new Date().toISOString(), fromDbVersion: oldVersion, operations, clients, categories, planning, history }, 'preInvoicingV3',
+            )).catch(() => { /* data itself is unchanged */ })
+          }
+        }
       },
     })
 }
 
 export async function loadAll() {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'meta'])
-  const [operations, clients, categories, planning, initialized] = await Promise.all([
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'invoicing', 'meta'])
+  const [operations, clients, categories, planning, invoicing, initialized] = await Promise.all([
     tx.objectStore('operations').getAll(),
     tx.objectStore('clients').getAll(),
     tx.objectStore('categories').getAll(),
     tx.objectStore('planning').getAll(),
+    tx.objectStore('invoicing').getAll(),
     tx.objectStore('meta').get('initialized'),
   ])
   await tx.done
-  return { operations, clients, categories, planning, initialized: !!initialized }
+  return { operations, clients, categories, planning, invoicing, initialized: !!initialized }
 }
 
 /** Read one committed snapshot, including its history, in a single transaction. */
 export async function backupSnapshot() {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'history'])
-  const [operations, clients, categories, planning, history] = await Promise.all([
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'invoicing', 'history'])
+  const [operations, clients, categories, planning, invoicing, history] = await Promise.all([
     tx.objectStore('operations').getAll(),
     tx.objectStore('clients').getAll(),
     tx.objectStore('categories').getAll(),
-    tx.objectStore('planning').getAll(), tx.objectStore('history').getAll(),
+    tx.objectStore('planning').getAll(), tx.objectStore('invoicing').getAll(), tx.objectStore('history').getAll(),
   ])
   await tx.done
-  return { operations, clients, categories, planning, history }
+  return { operations, clients, categories, planning, invoicing, history }
 }
 
 /** Writes records and their history entries in one transaction so they never diverge. */
@@ -122,7 +140,7 @@ export async function commit(
   history: HistoryEntry[] = [],
 ) {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'history'], 'readwrite')
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'invoicing', 'history'], 'readwrite')
   try {
     for (const p of puts) await tx.objectStore(p.store).put(p.value as never)
     for (const h of history) await tx.objectStore('history').put(h)
@@ -171,22 +189,24 @@ export async function replaceAll(data: {
   categories: Category[]
   history: HistoryEntry[]
   planning?: PlanningRecord[]
+  invoicing?: InvoicingRecord[]
 }, snapshot?: { app: string; version: number; exportedAt: string }) {
   const d = await db()
-  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'history', 'meta'], 'readwrite')
+  const tx = d.transaction(['operations', 'clients', 'categories', 'planning', 'invoicing', 'history', 'meta'], 'readwrite')
   try {
     if (snapshot) {
-      const [operations, clients, categories, planning, history] = await Promise.all([
+      const [operations, clients, categories, planning, invoicing, history] = await Promise.all([
         tx.objectStore('operations').getAll(), tx.objectStore('clients').getAll(),
-        tx.objectStore('categories').getAll(), tx.objectStore('planning').getAll(), tx.objectStore('history').getAll(),
+        tx.objectStore('categories').getAll(), tx.objectStore('planning').getAll(), tx.objectStore('invoicing').getAll(), tx.objectStore('history').getAll(),
       ])
-      await tx.objectStore('meta').put({ ...snapshot, operations, clients, categories, planning, history }, 'preRestore')
+      await tx.objectStore('meta').put({ ...snapshot, operations, clients, categories, planning, invoicing, history }, 'preRestore')
     }
-    await Promise.all(['operations', 'clients', 'categories', ...(data.planning ? ['planning'] : []), 'history'].map((s) => tx.objectStore(s as 'history').clear()))
+    await Promise.all(['operations', 'clients', 'categories', ...(data.planning ? ['planning'] : []), ...(data.invoicing ? ['invoicing'] : []), 'history'].map((s) => tx.objectStore(s as 'history').clear()))
     for (const o of data.operations) await tx.objectStore('operations').put(o)
     for (const c of data.clients) await tx.objectStore('clients').put(c)
     for (const c of data.categories) await tx.objectStore('categories').put(c)
     for (const r of data.planning ?? []) await tx.objectStore('planning').put(r)
+    for (const r of data.invoicing ?? []) await tx.objectStore('invoicing').put(r)
     for (const h of data.history) await tx.objectStore('history').put(h)
     await tx.done
   } catch (error) {

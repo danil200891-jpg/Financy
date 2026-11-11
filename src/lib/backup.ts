@@ -1,5 +1,8 @@
 import type { PlanningRecord } from './planning-types'
 import { validPlanning } from '../../sync-server/lib/planning.mjs'
+import { validInvoicing } from '../../sync-server/lib/invoicing.mjs'
+import type { InvoicingRecord } from './invoice-types'
+import { lastIssued } from './invoicing'
 import type { Category, Client, HistoryEntry, Operation, FinancialRecord } from './types'
 import * as DB from './db'
 import { actions, fingerprint, getState, waitForWrites } from './store'
@@ -8,7 +11,7 @@ import { canonical } from './sync/canonical'
 import { isPaired } from './sync'
 
 export const BACKUP_APP = 'finance-pwa'
-export const BACKUP_VERSION = 2
+export const BACKUP_VERSION = 3
 
 export interface Backup {
   app: typeof BACKUP_APP
@@ -18,10 +21,33 @@ export interface Backup {
   clients: Client[]
   categories: Category[]
   planning?: PlanningRecord[]
+  /** version 3+: issuer profiles, numbering series, invoice settings and invoices */
+  invoicing?: InvoicingRecord[]
   history: HistoryEntry[]
 }
 
 const stamp = () => new Date().toISOString().slice(0, 10)
+
+/**
+ * Issued invoices are a legal journal: a restore may bring back missing ones but never deletes,
+ * un-issues or edits one that exists here, and a numbering series never moves backwards
+ * (otherwise the same number could be handed out twice).
+ */
+const isIssued = (r: InvoicingRecord | undefined) => !!r && r.kind === 'invoice' && r.status !== 'draft'
+function protectSeries(record: InvoicingRecord, invoices: InvoicingRecord[]): InvoicingRecord {
+  if (record.kind !== 'series') return record
+  const current = getState().all.invoicing.find((r) => r.id === record.id)
+  const used = lastIssued(invoices.filter((r) => r.kind === 'invoice') as never, record.id)
+  const next = Math.max(record.next, current?.kind === 'series' ? current.next : 1, used + 1)
+  return next === record.next ? record : { ...record, next }
+}
+/** Full replacement list: the backup's invoicing records plus every issued invoice it lacks or would change. */
+function replaceInvoicing(list: InvoicingRecord[]) {
+  const byId = new Map(list.map((r) => [r.id, r]))
+  for (const cur of getState().all.invoicing) if (isIssued(cur) || (cur.kind === 'series' && !byId.has(cur.id))) byId.set(cur.id, cur)
+  const merged = [...byId.values()]
+  return merged.map((r) => protectSeries(r, merged))
+}
 
 function safePlanningRestore(record: PlanningRecord): PlanningRecord {
   const current = getState().all.planning.find((r) => r.id === record.id)
@@ -119,7 +145,7 @@ export async function undoRestore() {
     await (await DB.db()).delete('meta', 'preRestore')
     return true
   }
-  await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history, ...(b.planning ? { planning: b.planning } : {}) })
+  await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history, ...(b.planning ? { planning: b.planning } : {}), ...(b.invoicing ? { invoicing: replaceInvoicing(b.invoicing) } : {}) })
   await (await DB.db()).delete('meta', 'preRestore')
   await actions.reload()
   return true
@@ -135,6 +161,7 @@ function validOp(o: Operation) {
     && (o.source === undefined || ['manual', 'camera', 'upload', 'import'].includes(o.source))
     && (o.incomeKind === undefined || ['work', 'shoot', 'oneoff'].includes(o.incomeKind))
     && (!o.planningPayment || (isStr(o.planningPayment.envelopeId) && Number.isSafeInteger(o.planningPayment.reserved) && o.planningPayment.reserved >= 0))
+    && (o.invoiceId == null || isStr(o.invoiceId))
     && optionalDate(o.createdAt) && optionalDate(o.updatedAt) && optionalDate(o.deletedAt)
 }
 
@@ -149,6 +176,7 @@ export function parseBackup(text: string): Backup {
   if (raw.version !== undefined && (!Number.isInteger(raw.version) || raw.version < 1)) throw new Error('Некорректная версия резервной копии.')
   if (raw.version > BACKUP_VERSION) throw new Error('Копия создана более новой версией приложения. Обновите приложение.')
   if (raw.planning !== undefined && (!Array.isArray(raw.planning) || raw.planning.some((r) => !validPlanning(r)) || new Set(raw.planning.map((r) => r.id)).size !== raw.planning.length)) throw new Error('Планирование в копии повреждено. Данные не изменены.')
+  if (raw.invoicing !== undefined && (!Array.isArray(raw.invoicing) || raw.invoicing.some((r) => !validInvoicing(r)) || new Set(raw.invoicing.map((r) => r.id)).size !== raw.invoicing.length)) throw new Error('Фактуры в копии повреждены. Данные не изменены.')
   const bad = raw.operations.filter((o) => !validOp(o)).length
   if (bad) throw new Error(`В копии ${bad} повреждённых операций. Восстановление отменено, данные не изменены.`)
   if ([raw.clients, raw.categories, raw.history].some((records) => records !== undefined && !Array.isArray(records))) throw new Error('В копии повреждён список записей. Восстановление отменено.')
@@ -157,7 +185,7 @@ export function parseBackup(text: string): Backup {
   const history = Array.isArray(raw.history) ? raw.history : []
   const badClient = clients.some((c) => !c || !isStr(c.id) || !isStr(c.name) || (c.aliases !== undefined && (!Array.isArray(c.aliases) || c.aliases.some((alias) => !isStr(alias)))))
   const badCategory = categories.some((c) => !c || !isStr(c.id) || !isStr(c.name) || !['income', 'expense'].includes(c.type))
-  const badHistory = history.some((h) => !h || !isStr(h.id) || !isStr(h.entityId) || !['operation', 'client', 'category', 'planning'].includes(h.entity) || !['create', 'update', 'delete', 'restore'].includes(h.action) || !isStr(h.at) || !Number.isFinite(Date.parse(h.at)))
+  const badHistory = history.some((h) => !h || !isStr(h.id) || !isStr(h.entityId) || !['operation', 'client', 'category', 'planning', 'invoicing'].includes(h.entity) || !['create', 'update', 'delete', 'restore'].includes(h.action) || !isStr(h.at) || !Number.isFinite(Date.parse(h.at)))
   const duplicateIds = [raw.operations, clients, categories, history].some((records) => new Set(records.map((record) => record?.id)).size !== records.length)
   if (badClient || badCategory || badHistory || duplicateIds) throw new Error('В копии повреждены записи или повторяются ID. Восстановление отменено, данные не изменены.')
   if (raw.operations.some((o) => o.currency !== undefined && (!isStr(o.currency) || !/^[A-Za-z]{3}$/.test(o.currency)))) throw new Error('В копии указана некорректная валюта.')
@@ -190,7 +218,7 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
     return { added: r.restored, updated: r.changed, skippedDuplicates: 0, clients: b.clients.filter((c) => !c.deletedAt).length, categories: b.categories.filter((c) => !c.deletedAt).length }
   }
   if (mode === 'replace') {
-    await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history, ...(b.planning ? { planning: b.planning.map(safePlanningRestore) } : {}) }, { app: BACKUP_APP, version: BACKUP_VERSION, exportedAt: new Date().toISOString() })
+    await DB.replaceAll({ operations: b.operations, clients: b.clients, categories: b.categories, history: b.history, ...(b.planning ? { planning: b.planning.map(safePlanningRestore) } : {}), ...(b.invoicing ? { invoicing: replaceInvoicing(b.invoicing) } : {}) }, { app: BACKUP_APP, version: BACKUP_VERSION, exportedAt: new Date().toISOString() })
     await actions.reload()
     return {
       added: b.operations.filter((o) => !o.deletedAt).length, updated: 0, skippedDuplicates: 0,
@@ -226,7 +254,10 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
   sum.categories = categories.length
 
   const planning = (b.planning ?? []).filter((r) => newer(r, all.planning.find((p) => p.id === r.id)))
+  const invoicing = (b.invoicing ?? []).filter((r) => { const cur = all.invoicing.find((x) => x.id === r.id); return !isIssued(cur) && newer(r, cur) })
+  const allInvoicing = [...all.invoicing, ...invoicing]
   await DB.commit([
+    ...invoicing.map((value) => ({ store: 'invoicing' as const, value: protectSeries(value, allInvoicing) })),
     ...planning.map((value) => ({ store: 'planning' as const, value: safePlanningRestore(value) })),
     ...ops.map((value) => ({ store: 'operations' as const, value })),
     ...clients.map((value) => ({ store: 'clients' as const, value })),
@@ -238,7 +269,7 @@ export async function restore(b: Backup, mode: 'merge' | 'replace'): Promise<Res
 
 /* ---------------- restore as edits (sync-safe) ---------------- */
 
-const LIST: [EntityKind, 'operations' | 'clients' | 'categories' | 'planning'][] = [['operation', 'operations'], ['client', 'clients'], ['category', 'categories'], ['planning', 'planning']]
+const LIST: [EntityKind, 'operations' | 'clients' | 'categories' | 'planning' | 'invoicing'][] = [['operation', 'operations'], ['client', 'clients'], ['category', 'categories'], ['planning', 'planning'], ['invoicing', 'invoicing']]
 const content = (r: object) => canonical({ ...r, updatedAt: undefined })
 
 export interface RestorePlan {
@@ -253,24 +284,29 @@ export interface RestorePlan {
 }
 
 /** What restoring `b` would do. Nothing is written. */
-export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categories' | 'planning'>, removeExtra = false): RestorePlan {
+export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categories' | 'planning' | 'invoicing'>, removeExtra = false): RestorePlan {
   const { all } = getState()
   const plan: RestorePlan = { restored: 0, changed: 0, unchanged: 0, newer: 0, items: [] }
   for (const [entity, list] of LIST) {
     if (list === 'planning' && b.planning === undefined) continue
+    if (list === 'invoicing' && b.invoicing === undefined) continue
     const local = new Map<string, FinancialRecord>(all[list].map((r) => [r.id, r]))
     const inBackup = new Set<string>()
     for (const r of b[list] as (FinancialRecord)[]) {
       inBackup.add(r.id)
       const cur = local.get(r.id)
       if (cur && content(cur) === content(r)) { plan.unchanged++; continue }
+      if (list === 'invoicing' && isIssued(cur as InvoicingRecord)) { plan.unchanged++; continue }
       const back = !cur || (!!cur.deletedAt && !r.deletedAt)
       if (back) plan.restored++; else plan.changed++
-      plan.items.push({ entity, data: entity === 'planning' ? safePlanningRestore(r as PlanningRecord) : r, action: back && cur ? 'restore' : 'update' })
+      const data = entity === 'planning' ? safePlanningRestore(r as PlanningRecord) : entity === 'invoicing' ? protectSeries(r as InvoicingRecord, [...all.invoicing, ...(b.invoicing ?? [])]) : r
+      plan.items.push({ entity, data, action: back && cur ? 'restore' : 'update' })
     }
     for (const cur of all[list]) {
       // Balance checkpoints and reserve commands are an immutable financial journal.
       if (list === 'planning' && ['balance', 'movement'].includes((cur as PlanningRecord).kind)) continue
+      // issued invoices and numbering series are never removed by a restore
+      if (list === 'invoicing' && (isIssued(cur as InvoicingRecord) || (cur as InvoicingRecord).kind === 'series')) continue
       if (inBackup.has(cur.id) || cur.deletedAt) continue
       plan.newer++
       if (list === 'planning' && (cur as PlanningRecord).kind === 'envelope' && removeExtra) {
@@ -284,7 +320,7 @@ export function planRestore(b: Pick<Backup, 'operations' | 'clients' | 'categori
 }
 
 /** Writes the plan as ordinary edits: history is kept, nothing is hard-deleted, the PC receives it on the next sync. */
-export async function applyAsEdits(b: Pick<Backup, 'operations' | 'clients' | 'categories' | 'planning'>, removeExtra = false) {
+export async function applyAsEdits(b: Pick<Backup, 'operations' | 'clients' | 'categories' | 'planning' | 'invoicing'>, removeExtra = false) {
   await waitForWrites()
   const plan = planRestore(b, removeExtra)
   actions.putAsEdits(plan.items)

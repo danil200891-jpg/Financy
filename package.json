@@ -18,23 +18,26 @@
     "test:preview": "node scripts/test-preview.mjs",
     "test:update": "node scripts/test-update.mjs",
     "prepare": "git config core.hooksPath .githooks || true",
-    "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs sync-server/test/planning.test.mjs",
+    "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs sync-server/test/planning.test.mjs sync-server/test/invoicing.test.mjs",
     "sync-server": "node sync-server/server.mjs",
     "test:sync": "node scripts/test-sync.mjs"
   },
   "dependencies": {
     "@fontsource-variable/onest": "^5.3.1",
     "@fontsource-variable/unbounded": "^5.3.0",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/rus": "^1.0.0",
     "@tesseract.js-data/spa": "^1.0.0",
     "idb": "^8.0.4",
     "lucide-react": "^1.71.0",
+    "pdf-lib": "^1.17.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@expo-google-fonts/onest": "^0.4.2",
     "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
