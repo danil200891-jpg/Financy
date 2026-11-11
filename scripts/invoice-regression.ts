@@ -10,7 +10,7 @@ import * as backup from '../src/lib/backup'
 import { totals } from '../src/lib/stats'
 import type { Invoice, InvoiceSeries } from '../src/lib/invoice-types'
 import {
-  createSeries, invoicesOf, issueInvoice, issueProblems, linkableOperations, markPaid, markUnpaid, newDraft, rectifyingDraft, saveDraft, saveIssuer,
+  autoNumber, createSeries, invoicesOf, issueInvoice, issueProblems, linkableOperations, parseRequestedNumber, markPaid, markUnpaid, newDraft, rectifyingDraft, saveDraft, saveIssuer,
   seriesOf, setSeriesStart, takeOverSeries, voidInvoice,
 } from '../src/lib/invoice-actions'
 import { computeTotals, displayStatus, parseNumberExample, taxIdKind, validIban } from '../src/lib/invoicing'
@@ -198,7 +198,15 @@ export async function runInvoiceRegression() {
   check(!sparse.fields.legalName && !sparse.fields.taxId && !sparse.fields.address, 'recognition invented fields')
   const bad = recognizeClient('NIF: 12345678A')
   check(bad.fields.taxId === '12345678A' && bad.taxIdInvalid, 'invalid NIF not flagged')
-  pass('client recognition fills only found fields, flags a NIF with a wrong control letter, invents nothing')
+  const pv1 = recognizeClient('Estudio Lumen S.L.\nCIF B12345674\nAvenida Diagonal 100\n08019 Barcelona (Barcelona)').fields
+  const pv2 = recognizeClient('Bar Txoko S.L.\nCalle Estafeta 3\n31001 Pamplona, Navarra').fields
+  const pv3 = recognizeClient('Ana López\nCalle Sol 5\n28013 Madrid').fields
+  const pv4 = recognizeClient('Cliente: Mas Rural S.L.\nCarrer Major 1\n17001 Girona\nProvincia: Girona').fields
+  check(pv1.city === 'Barcelona' && pv1.province === 'Barcelona', `province in brackets ${JSON.stringify(pv1)}`)
+  check(pv2.city === 'Pamplona' && pv2.province === 'Navarra', `province after comma ${JSON.stringify(pv2)}`)
+  check(pv3.city === 'Madrid' && pv3.province === undefined, `province invented from the city ${JSON.stringify(pv3)}`)
+  check(pv4.province === 'Girona', `labelled province ${JSON.stringify(pv4)}`)
+  pass('client recognition fills only found fields, flags a NIF with a wrong control letter, invents nothing; province only when written (brackets, comma, label)')
 
   // 11b. previously used services: unique, most used first, names only, kept after a restart
   for (const name of ['видеосъёмка  ', 'Монтаж ролика', 'Видеосъёмка']) {
@@ -254,6 +262,17 @@ export async function runInvoiceRegression() {
   create.click(); await wait(300)
   check(document.querySelector('[role="dialog"]')?.textContent?.includes('Новая фактура'), 'invoice form did not open')
   check(![...document.querySelectorAll('[role="dialog"] span')].some((n) => n.textContent === 'Оплатить до'), 'due date field still in the form')
+  const order = [...document.querySelectorAll('[role="dialog"] section')].map((x) => x.querySelector('p, label span')?.textContent?.trim() ?? '')
+  check(order[0] === 'Выставитель' && order[1] === 'Номер фактуры' && order[2] === 'Клиент' && order[3] === 'Дата выставления' && order[4] === 'Услуги', `form order: ${order.join(' | ')}`)
+  const numberInput = [...document.querySelectorAll<HTMLLabelElement>('[role="dialog"] label')].find((l) => l.textContent?.startsWith('Номер фактуры'))?.querySelector('input')
+  check(numberInput && /^[A-Z]-\d{4}$/.test(numberInput.value), `number field ${numberInput?.value}`)
+  // a sheet opened from the form is a separate top layer, the form below is inert
+  ;([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] section button')][0]).click(); await wait(150)
+  const layers = [...document.querySelectorAll<HTMLElement>('body > div')].filter((d) => d.querySelector(':scope > [role="dialog"]'))
+  check(layers.length === 2 && Number(layers[1].style.zIndex) > Number(layers[0].style.zIndex) && layers[0].hasAttribute('inert') && !layers[1].hasAttribute('inert'), 'stacked sheet is not the only active top layer')
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await wait(150)
+  const after = [...document.querySelectorAll<HTMLElement>('body > div')].filter((d) => d.querySelector(':scope > [role="dialog"]'))
+  check(after.length === 1 && !after[0].hasAttribute('inert') && after[0].textContent?.includes('Новая фактура'), 'Escape closed more than the top sheet')
   const irpfInput = [...document.querySelectorAll<HTMLLabelElement>('[role="dialog"] label')].find((l) => l.textContent?.startsWith('IRPF'))?.querySelector('input')
   check(irpfInput?.value === '0', `IRPF field shows ${irpfInput?.value}`)
   const desc = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea[aria-label="Описание услуги"]')!
@@ -289,7 +308,7 @@ export async function samplePdfBase64() {
 /* ---------------- restart check: details and numbering survive app restarts ---------------- */
 const ISSUER = { label: 'Autónomo', name: 'Restart Test Autónomo', taxId: 'X1234567L', address: 'Calle Mayor 12, 3º B', postalCode: '28013', city: 'Madrid', country: 'España', email: 'restart@example.com', phone: '+34 600 111 222', iban: 'ES91 2100 0418 4502 0005 1332', logo: null }
 const CLIENTS = [
-  { name: 'Lumen', legalName: 'Estudio Lumen S.L.', taxId: 'B12345674', address: 'Avenida Diagonal 100', postalCode: '08019', city: 'Barcelona', country: 'España', email: 'admin@lumen.example' },
+  { name: 'Lumen', legalName: 'Estudio Lumen S.L.', taxId: 'B12345674', address: 'Avenida Diagonal 100', postalCode: '08019', city: 'Barcelona', province: 'Barcelona', country: 'España', email: 'admin@lumen.example' },
   { name: 'Ana', legalName: 'Ana García López', taxId: '12345678Z', address: 'Calle Sol 5', postalCode: '29001', city: 'Málaga', country: 'España' },
 ]
 const issuerKeys = ['name', 'taxId', 'address', 'postalCode', 'city', 'country', 'email', 'phone', 'iban'] as const
@@ -304,7 +323,7 @@ async function issueSequence(clientIds: string[], labels: string[]) {
     const done = await issueInvoice(d.id)
     for (const k of issuerKeys) check((done.issuer as Record<string, unknown>)[k] === ISSUER[k], `issuer ${k} missing on ${done.code}: ${(done.issuer as Record<string, unknown>)[k]}`)
     const c = CLIENTS[i % CLIENTS.length]
-    check(done.client?.name === c.legalName && done.client?.taxId === c.taxId && done.client?.address === c.address && done.client?.postalCode === c.postalCode && done.client?.city === c.city, `client data missing on ${done.code}`)
+    check(done.client?.name === c.legalName && done.client?.taxId === c.taxId && done.client?.address === c.address && done.client?.postalCode === c.postalCode && done.client?.city === c.city && done.client?.province === (c as { province?: string }).province, `client data missing on ${done.code}`)
     codes.push(done.code!)
   }
   return codes
@@ -343,22 +362,44 @@ export async function restartPhase2() {
   const dialog = document.querySelector('[role="dialog"]')!
   const iban = [...dialog.querySelectorAll('label')].find((l) => l.textContent?.startsWith('IBAN'))?.querySelector('input')?.value
   check(iban === ISSUER.iban, `IBAN not pre-filled in the form: ${iban}`)
-  check(dialog.textContent?.includes('Номер при выставлении: F-0029'), 'form does not show the next number F-0029')
-  const issuerChip = [...dialog.querySelectorAll('button')].find((b) => b.textContent === ISSUER.label)
-  check(issuerChip && issuerChip.className.includes('bg-iris'), 'issuer profile not selected in the form')
+  const num = [...dialog.querySelectorAll('label')].find((l) => l.textContent?.startsWith('Номер фактуры'))?.querySelector('input')?.value
+  check(num === 'F-0029', `form does not offer the next number F-0029: ${num}`)
+  const first = dialog.querySelector('section')
+  check(first?.textContent?.includes('Выставитель') && first.textContent.includes(ISSUER.name) && first.textContent.includes(ISSUER.taxId), 'issuer not shown at the top of the form')
   const codes = await issueSequence(clients.map((x) => x!.id), ['Монтаж', 'Видеосъёмка', 'SMM и продвижение социальных сетей'])
   check(codes.join() === 'F-0029,F-0030,F-0031', `after restart codes ${codes}`)
-  return `phase 2: ${codes.join(', ')}`
+  // invoices F-0032…F-0035 were made in another program: the next one is typed by hand
+  const sid = (getState().invoicing.find((r) => r.kind === 'series') as InvoiceSeries).id
+  const bad = (t: string) => { const r = parseRequestedNumber(sid, t); return 'error' in r ? r.error : null }
+  check(bad('F-0030')?.includes('уже сохранена'), 'taken number accepted')
+  check(bad('R-0036')?.includes('начинаются с'), 'other prefix accepted')
+  check(bad('F-0000') !== null && bad('abc') !== null, 'invalid number accepted')
+  const req = parseRequestedNumber(sid, 'f-36')
+  check('number' in req && req.number === 36, `f-36 not read as 36: ${JSON.stringify(req)}`)
+  const twin = async (label: string) => { const d = newDraft({ clientId: clients[0]!.id }); await saveDraft({ ...d, requestedNumber: 36, lines: [{ id: `t-${label}`, description: label, quantity: 100, unitPrice: 1000 }] }); return d.id }
+  const t1 = await twin('A'); const t2 = await twin('B')
+  check(invoicesOf(getState().all.invoicing).filter((i) => i.status === 'draft').every((i) => i.number === null && i.code === null), 'draft with a hand-typed number holds it')
+  check(autoNumber(sid) === 32, 'drafts with requested numbers moved the counter')
+  check((await issueInvoice(t1)).code === 'F-0036', 'hand-typed number not used')
+  check(issueProblems(invoicesOf(getState().all.invoicing).find((i) => i.id === t2)!).some((x) => x.includes('F-0036')), 'second draft with the same number not blocked')
+  await throws(() => issueInvoice(t2), 'same number issued twice')
+  check(autoNumber(sid) === 37, `automatic numbering does not continue after F-0036: ${autoNumber(sid)}`)
+  const gap = newDraft({ clientId: clients[1]!.id }); await saveDraft({ ...gap, requestedNumber: 33, lines: [{ id: 'g', description: 'Видеосъёмка', quantity: 100, unitPrice: 1000 }] })
+  check((await issueInvoice(gap.id)).code === 'F-0033' && autoNumber(sid) === 37, 'a free lower number moved the counter back')
+  const auto = newDraft({ clientId: clients[1]!.id }); await saveDraft({ ...auto, lines: [{ id: 'au', description: 'SMM', quantity: 100, unitPrice: 1000 }] })
+  check((await issueInvoice(auto.id)).code === 'F-0037', 'next automatic number after manual ones')
+  return `phase 2: ${codes.join(', ')}, hand-typed F-0036 and F-0033, then automatic F-0037`
 }
 
 export async function restartPhase3() {
   await initStore()
   const codes = issuedCodes()
-  check(codes.join() === 'F-0026,F-0027,F-0028,F-0029,F-0030,F-0031' && new Set(codes).size === codes.length, `numbers after second restart: ${codes}`)
+  check(codes.join() === 'F-0026,F-0027,F-0028,F-0029,F-0030,F-0031,F-0033,F-0036,F-0037' && new Set(codes).size === codes.length, `numbers after second restart: ${codes}`)
   const series = getState().invoicing.find((r) => r.kind === 'series') as InvoiceSeries
-  check(series.next === 32, `series counter ${series.next}`)
+  check(series.next === 38, `series counter ${series.next}`)
   check(getState().clients.length === 2 && getState().invoicing.filter((r) => r.kind === 'issuer').length === 1, 'profiles or clients duplicated')
   const d = newDraft({ clientId: getState().clients[0].id })
   check(d.issuerId === defaultIssuerId() && d.iban === ISSUER.iban, 'details not pre-filled after second restart')
-  return `phase 3: 6 unique consecutive numbers, next F-0032, details still pre-filled`
+  check(getState().clients.find((c) => c.name === 'Lumen')?.province === 'Barcelona', 'province lost after restart')
+  return `phase 3: 9 unique numbers incl. hand-typed ones, next F-0038, details and province still there`
 }

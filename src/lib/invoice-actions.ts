@@ -118,7 +118,7 @@ export function newDraft(opts: { clientId?: string | null; issuerId?: string | n
 export function saveDraft(inv: Invoice) {
   const cur = find<Invoice>(inv.id)
   if (cur && cur.status !== 'draft') throw new Error('Выставленную фактуру изменить нельзя.')
-  actions.saveInvoicing({ ...inv, status: 'draft', number: null, code: null, updatedAt: now() })
+  actions.saveInvoicing({ ...inv, status: 'draft', number: null, code: null, requestedNumber: inv.requestedNumber ?? null, updatedAt: now() })
   return waitForWrites()
 }
 
@@ -129,6 +129,43 @@ export function deleteDraft(id: string) {
   actions.saveInvoicing({ ...cur, deletedAt: t, updatedAt: t })
 }
 
+/* ---------------- numbering of one invoice ---------------- */
+
+/** Next automatic number of a series: never below the counter, never below the highest number used. */
+export function autoNumber(seriesId: string) {
+  const s = find<InvoiceSeries>(seriesId)
+  return s ? Math.max(s.next, seriesUsed(seriesId) + 1) : null
+}
+
+/** The number this invoice gets when issued: the one typed by hand, otherwise the next one. */
+export const numberFor = (inv: Pick<Invoice, 'seriesId' | 'requestedNumber'>) => inv.requestedNumber ?? autoNumber(inv.seriesId)
+
+/** Another saved invoice (issued, paid or void) of the series already uses this number. */
+export const numberTaken = (seriesId: string, n: number, exceptId?: string) =>
+  allInvoices().some((o) => o.id !== exceptId && !o.deletedAt && o.seriesId === seriesId && o.number === n)
+
+/**
+ * A hand-typed number: «F-0036», «f-36» or just «36». The prefix must be the series' own; the number
+ * must not be used by any saved invoice of the series. Returns null for «automatic».
+ */
+export function parseRequestedNumber(seriesId: string, text: string, invoiceId?: string): { number: number | null } | { error: string } {
+  const s = find<InvoiceSeries>(seriesId)
+  if (!s) return { error: 'Сначала выберите серию.' }
+  const t = text.trim()
+  if (!t) return { number: null }
+  let n: number
+  if (/^\d+$/.test(t)) n = Number(t)
+  else {
+    const p = parseNumberExample(t)
+    if (!p) return { error: 'Номер должен заканчиваться цифрами, например ' + formatCode(s, autoNumber(s.id) ?? 1) }
+    if (p.prefix.toUpperCase() !== s.prefix.toUpperCase()) return { error: `В серии «${s.name}» номера начинаются с «${s.prefix}». Для другого префикса создайте серию.` }
+    n = p.next
+  }
+  if (!Number.isSafeInteger(n) || n < 1) return { error: 'Номер должен быть больше нуля.' }
+  if (numberTaken(s.id, n, invoiceId)) return { error: `Фактура ${formatCode(s, n)} уже сохранена. Укажите другой номер.` }
+  return { number: n === autoNumber(s.id) ? null : n }
+}
+
 /* ---------------- issuing ---------------- */
 
 export const issuerSnapshot = (i: IssuerProfile, iban?: string) => ({
@@ -137,7 +174,7 @@ export const issuerSnapshot = (i: IssuerProfile, iban?: string) => ({
 })
 export const clientSnapshot = (c: Client): PartySnapshot => ({
   name: (c.legalName || c.name).trim(), taxId: (c.taxId ?? '').trim(), address: (c.address ?? '').trim(), postalCode: c.postalCode?.trim() || undefined,
-  city: c.city?.trim() || undefined, country: c.country?.trim() || undefined, email: c.email?.trim() || undefined, phone: c.phone?.trim() || undefined,
+  city: c.city?.trim() || undefined, province: c.province?.trim() || undefined, country: c.country?.trim() || undefined, email: c.email?.trim() || undefined, phone: c.phone?.trim() || undefined,
 })
 
 /** Everything that blocks issuing, in plain words. Empty list = ready. */
@@ -148,6 +185,7 @@ export function issueProblems(inv: Invoice): string[] {
   const client = getState().clients.find((c) => c.id === inv.clientId)
   if (!series) out.push('Выберите серию нумерации (Настройки → Фактуры).')
   else if (!seriesOwnedHere(series)) out.push(`Серия «${series.name}» выпускается на другом устройстве.`)
+  else if (inv.requestedNumber != null && numberTaken(series.id, inv.requestedNumber, inv.id)) out.push(`Номер ${formatCode(series, inv.requestedNumber)} уже занят. Укажите другой.`)
   if (!issuer) out.push('Заполните «Мои реквизиты».')
   else {
     if (!issuer.name.trim()) out.push('В реквизитах нет имени или названия.')
@@ -182,17 +220,19 @@ export async function issueInvoice(id: string) {
   const series = find<InvoiceSeries>(inv.seriesId)!
   const issuer = find<IssuerProfile>(inv.issuerId!)!
   const client = getState().clients.find((c) => c.id === inv.clientId)!
-  const number = Math.max(series.next, seriesUsed(series.id) + 1)
-  if (allInvoices().some((o) => o.id !== id && !o.deletedAt && o.seriesId === series.id && o.number === number)) throw new Error('Этот номер уже занят. Обновите приложение и попробуйте ещё раз.')
+  // a hand-typed number (e.g. continuing after invoices made in another program), else the next one
+  const number = inv.requestedNumber ?? Math.max(series.next, seriesUsed(series.id) + 1)
+  if (numberTaken(series.id, number, id)) throw new Error(`Номер ${formatCode(series, number)} уже занят. Укажите другой номер.`)
   const lines = inv.lines.filter((l) => l.description.trim() || l.unitPrice).map((l) => ({ ...l, description: l.description.trim() }))
   const t = now()
   const issued: Invoice = {
-    ...inv, status: 'issued', number, code: formatCode(series, number), lines, issuedAt: t, dueDate: null,
+    ...inv, status: 'issued', number, code: formatCode(series, number), requestedNumber: null, lines, issuedAt: t, dueDate: null,
     issuer: issuerSnapshot(issuer, inv.iban), client: clientSnapshot(client),
     totals: computeTotals(lines, inv.vatRate, inv.irpfRate), iban: (inv.iban ?? issuer.iban ?? '').trim(),
   }
   actions.putAsEdits([
-    { entity: 'invoicing', data: { ...series, next: number + 1 } },
+    // automatic numbering continues after the highest number ever issued; it never moves back
+    { entity: 'invoicing', data: { ...series, next: Math.max(series.next, number + 1) } },
     { entity: 'invoicing', data: issued },
   ])
   await waitForWrites()

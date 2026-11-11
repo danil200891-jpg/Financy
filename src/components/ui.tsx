@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Briefcase, Camera, Sparkles, ShoppingBasket, Coffee, ShoppingBag, Car, Home, Repeat, Heart, Tag,
   Plane, Gift, UserRound, GraduationCap, Dumbbell, Smartphone, Zap, PawPrint, Receipt, Wallet, ChevronLeft, ScanLine, ImageUp, Keyboard,
@@ -137,39 +138,112 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
   return <div data-scroll-reveal="" className={`glass rounded-[26px] ${className}`}>{children}</div>
 }
 
-/** Bottom sheet with drag-to-dismiss on the grabber. */
+/* Open sheets, bottom to top. Only the top one reacts to taps, Escape and the backdrop. */
+const sheetStack: string[] = []
+const stackListeners = new Set<() => void>()
+const stackChanged = () => stackListeners.forEach((l) => l())
+let stackVersion = 0
+function useSheetDepth(id: string, open: boolean) {
+  useEffect(() => {
+    if (!open) return
+    sheetStack.push(id); stackVersion++; stackChanged()
+    return () => { const i = sheetStack.indexOf(id); if (i >= 0) sheetStack.splice(i, 1); stackVersion++; stackChanged() }
+  }, [id, open])
+  useSyncExternalStore((l) => { stackListeners.add(l); return () => stackListeners.delete(l) }, () => stackVersion)
+  const depth = sheetStack.indexOf(id)
+  return { depth: Math.max(0, depth), top: depth >= 0 && depth === sheetStack.length - 1 }
+}
+
+/** The part of the screen not covered by the iPhone keyboard. */
+function useVisibleViewport(active: boolean) {
+  const [box, setBox] = useState<{ top: number; height: number } | null>(null)
+  const changedAt = useRef(0)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!active || !vv) return
+    const update = () => {
+      changedAt.current = Date.now()
+      // only pin to the visual viewport while it is really smaller (keyboard open)
+      setBox(window.innerHeight - vv.height > 1 || vv.offsetTop > 1 ? { top: vv.offsetTop, height: vv.height } : null)
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => { vv.removeEventListener('resize', update); vv.removeEventListener('scroll', update) }
+  }, [active])
+  return { box, changedAt }
+}
+
+/**
+ * Bottom sheet with drag-to-dismiss on the grabber. Rendered at the end of <body> (never inside
+ * another sheet, whose blur would otherwise capture it), stacked above earlier sheets, and kept
+ * inside the area above the keyboard so every field stays reachable.
+ */
 export function Sheet({ open, onClose, children, title, full }: {
   open: boolean; onClose: () => void; children: ReactNode; title?: string; full?: boolean
 }) {
+  const id = useId()
   const [dy, setDy] = useState(0)
-  const [keyboardInset, setKeyboardInset] = useState(0)
   const start = useRef<number | null>(null)
   const close = useRef(onClose)
   close.current = onClose
+  const panel = useRef<HTMLDivElement>(null)
+  const { depth, top } = useSheetDepth(id, open)
+  const topRef = useRef(top)
+  topRef.current = top
+  const { box, changedAt } = useVisibleViewport(open)
   useEffect(() => {
     if (!open) return
     const unlock = lockBodyScroll()
-    const viewport = window.visualViewport
-    const resize = () => setKeyboardInset(viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0)
-    resize()
-    viewport?.addEventListener('resize', resize)
-    const keyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close.current() }
+    const keyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && topRef.current) close.current() }
     document.addEventListener('keydown', keyDown)
-    return () => { unlock(); document.removeEventListener('keydown', keyDown); viewport?.removeEventListener('resize', resize) }
+    return () => { unlock(); document.removeEventListener('keydown', keyDown) }
   }, [open])
   useEffect(() => {
     if (!open) setDy(0)
   }, [open])
+  // keep the focused field visible once the keyboard has opened
+  useEffect(() => {
+    const el = panel.current
+    if (!open || !el) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const focus = (e: FocusEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.matches('input, textarea, select')) return
+      clearTimeout(timer)
+      timer = setTimeout(() => { try { target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { target.scrollIntoView() } }, 320)
+    }
+    el.addEventListener('focusin', focus)
+    return () => { clearTimeout(timer); el.removeEventListener('focusin', focus) }
+  }, [open])
   if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50" style={{ bottom: keyboardInset }}>
-      <div className="anim-fade absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={onClose} />
+  const backdrop = () => {
+    if (!topRef.current) return
+    // a tap outside while typing only hides the keyboard; it never closes the form or drops input
+    const active = document.activeElement as HTMLElement | null
+    if (active && panel.current?.contains(active) && active.matches('input, textarea, select')) { active.blur(); return }
+    if (Date.now() - changedAt.current < 600) return
+    onClose()
+  }
+  return createPortal(
+    <div
+      className="fixed inset-x-0 top-0 bottom-0"
+      style={{ zIndex: 50 + depth * 2, ...(box ? { top: box.top, height: box.height, bottom: 'auto' } : {}) }}
+      inert={!top || undefined}
+      aria-hidden={!top || undefined}
+    >
+      <div className={`anim-fade absolute inset-0 backdrop-blur-[2px] ${depth ? 'bg-black/70' : 'bg-black/55'}`} onClick={backdrop} />
       <div
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={title ?? 'Добавление операции'}
-        className={`glass-strong anim-sheet absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-[520px] flex-col rounded-t-[32px] ${full ? 'top-[max(env(safe-area-inset-top),16px)]' : 'max-h-[92%]'}`}
-        style={{ transform: dy ? `translateY(${dy}px)` : undefined, transition: start.current === null ? 'transform 300ms var(--ease-spring)' : 'none' }}
+        className={`glass-strong anim-sheet absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-[520px] flex-col rounded-t-[32px] ${full ? (box ? 'top-2' : 'top-[max(env(safe-area-inset-top),16px)]') : 'max-h-[92%]'}`}
+        style={{
+          transform: dy ? `translateY(${dy}px)` : undefined, transition: start.current === null ? 'transform 300ms var(--ease-spring)' : 'none',
+          // a sheet opened over another one is opaque, so the form below never shows through
+          ...(depth ? { backgroundColor: 'rgb(18,20,32)' } : {}),
+        }}
       >
         <div
           className="flex shrink-0 touch-none flex-col items-center pt-2.5 pb-1"
@@ -181,9 +255,10 @@ export function Sheet({ open, onClose, children, title, full }: {
           <div className="h-1.5 w-10 rounded-full bg-white/20" />
           {title && <h2 className="mt-3 text-[17px] font-semibold">{title}</h2>}
         </div>
-        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">{children}</div>
+        <div className={`no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain ${box ? 'pb-4' : 'pb-[calc(env(safe-area-inset-bottom)+16px)]'}`}>{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

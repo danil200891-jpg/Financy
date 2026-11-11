@@ -70,6 +70,8 @@ export interface PartySnapshot {
   address: string
   postalCode?: string
   city?: string
+  /** provincia, e.g. Barcelona, Navarra */
+  province?: string
   country?: string
   email?: string
   phone?: string
@@ -91,6 +93,11 @@ export interface Invoice extends InvoicingBase {
   seriesId: string
   /** assigned only when issued; drafts have null and never consume a number */
   number: number | null
+  /**
+   * Draft only: number typed by hand (e.g. invoices are also issued in another program). It is a request,
+   * not a reservation — checked against the series again when issuing.
+   */
+  requestedNumber?: number | null
   code: string | null
   issueDate: string
   dueDate?: string | null

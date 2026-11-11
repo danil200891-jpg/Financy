@@ -43,7 +43,9 @@ function wrap(text: string, font: PDFFont, size: number, width: number) {
 }
 
 function partyLines(p: PartySnapshot) {
-  return [p.name, p.taxId ? `NIF: ${p.taxId}` : '', p.address, [p.postalCode, p.city].filter(Boolean).join(' '), p.country ?? '', p.email ?? '', p.phone ?? ''].filter((l) => l && l.trim())
+  // «08019 Barcelona (Barcelona)»: the province only when it is filled in
+  const place = [p.postalCode, p.city].filter(Boolean).join(' ') + (p.province?.trim() ? (p.postalCode || p.city ? ` (${p.province.trim()})` : p.province.trim()) : '')
+  return [p.name, p.taxId ? `NIF: ${p.taxId}` : '', p.address, place, p.country ?? '', p.email ?? '', p.phone ?? ''].filter((l) => l && l.trim())
 }
 
 export interface PdfInput {

@@ -26,7 +26,9 @@ async function until(test: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 300; i++) { if (await test()) return; await wait() }
   throw new Error('Timed out waiting for application state')
 }
-function button(text: string, root: ParentNode = document.querySelector('[role="dialog"]') ?? document) {
+// sheets are separate layers in <body>; the active one is the last that is not inert
+const topDialog = () => [...document.querySelectorAll('[role="dialog"]')].filter((d) => !d.closest('[inert]')).pop()
+function button(text: string, root: ParentNode = topDialog() ?? document) {
   const result = [...root.querySelectorAll('button')].filter((node) => !node.closest('[aria-hidden="true"]')).find((node) => node.textContent?.trim() === text || node.getAttribute('aria-label') === text || node.querySelector('p')?.textContent?.trim() === text || node.querySelector('span')?.textContent?.trim() === text)
   check(result && !result.disabled, `Missing enabled button ${text}`)
   return result

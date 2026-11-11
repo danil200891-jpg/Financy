@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, Ban, Check, ChevronRight, Copy, FilePlus2, FileText, Plus, Search, Share2, Trash2, Undo2, UserPlus, Wallet, X } from 'lucide-react'
 import { getState, uid, useStore } from '../../lib/store'
 import { toast } from '../../lib/toast'
@@ -7,9 +8,9 @@ import { fmt } from '../../lib/format'
 import type { Invoice, InvoiceLine, IssuerProfile } from '../../lib/invoice-types'
 import {
   clientSnapshot, defaultIssuer, defaultSeries, deleteDraft, invoicesOf, issueInvoice, issueProblems, issuerSnapshot, issuersOf, linkableOperations,
-  markPaid, markUnpaid, newDraft, newLine, rectifyingDraft, saveDraft, seriesOf, seriesOwnedHere, voidInvoice,
+  autoNumber, markPaid, markUnpaid, newDraft, newLine, numberFor, parseRequestedNumber, rectifyingDraft, saveDraft, seriesOf, seriesOwnedHere, voidInvoice,
 } from '../../lib/invoice-actions'
-import { STATUS_COLOR, STATUS_LABEL, computeTotals, displayStatus, formatCode, formatIban, lastIssued, lineAmount, localDay, moneyInput, parseMoney, parseQuantity, parseRate, quantityLabel, rateLabel, taxIdKind, validIban } from '../../lib/invoicing'
+import { STATUS_COLOR, STATUS_LABEL, computeTotals, displayStatus, formatCode, formatIban, lineAmount, localDay, moneyInput, parseMoney, parseQuantity, parseRate, quantityLabel, rateLabel, taxIdKind, validIban } from '../../lib/invoicing'
 import { Avatar, Card, PrimaryButton, Sheet } from '../ui'
 import { Field } from './Field'
 import { suggestServices, usedServices, type ServiceName } from '../../lib/service-suggestions'
@@ -134,7 +135,7 @@ function Preview({ inv, code }: { inv: Invoice; code: string }) {
         <p className="mt-1 break-words text-[13px] font-semibold">{p.name}</p>
         {p.taxId && <p>NIF: {p.taxId}</p>}
         <p className="break-words">{p.address}</p>
-        <p>{[p.postalCode, p.city].filter(Boolean).join(' ')}</p>
+        <p>{[p.postalCode, p.city].filter(Boolean).join(' ')}{p.province?.trim() ? (p.postalCode || p.city ? ` (${p.province.trim()})` : p.province.trim()) : ''}</p>
         {p.email && <p className="break-all">{p.email}</p>}
       </> : <p className="mt-1 text-red-500">нет данных</p>}
     </div>
@@ -229,6 +230,8 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
   const [seriesOpen, setSeriesOpen] = useState(false)
   const [pay, setPay] = useState(false)
   const [confirmIssue, setConfirmIssue] = useState(false)
+  /** text of the number field while the user edits it; null = show the automatic / saved number */
+  const [numText, setNumText] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -237,6 +240,7 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
     setDraft(base ? { ...base, dueDate: null, lines: base.lines.length ? base.lines : [newLine()] } : null)
     if (base) setRates({ vat: String(base.vatRate / 100).replace('.', ','), irpf: String(base.irpfRate / 100).replace('.', ',') })
     setMode('edit')
+    setNumText(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, invoiceId])
 
@@ -254,7 +258,11 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
   const series = seriesOf(invoicing)
   const usable = series.filter((s) => (draft?.rectifiesId ? s.rectifying : !s.rectifying))
   const curSeries = series.find((s) => s.id === inv?.seriesId)
-  const nextCode = curSeries ? formatCode(curSeries, Math.max(curSeries.next, lastIssued(invoicesOf(getState().all.invoicing), curSeries.id) + 1)) : '—'
+  const planned = inv && curSeries ? numberFor(inv) : null
+  const nextCode = curSeries && planned ? formatCode(curSeries, planned) : '—'
+  const curIssuer = issuersOf(invoicing).find((i) => i.id === inv?.issuerId)
+  const numCheck = draft && curSeries && numText !== null ? parseRequestedNumber(curSeries.id, numText, draft.id) : null
+  const numError = numCheck && 'error' in numCheck ? numCheck.error : null
   const client = clients.find((c) => c.id === inv?.clientId)
   const issuers = issuersOf(invoicing)
   const totals = useMemo(() => inv ? (inv.totals ?? computeTotals(inv.lines, inv.vatRate, inv.irpfRate)) : null, [inv])
@@ -356,7 +364,51 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
         </div>
       ) : (
         <div className="space-y-5 px-4 pt-3">
-          {/* client */}
+          {/* 1. issuer — who issues the invoice, always at the top */}
+          <section className="space-y-2">
+            <p className="px-1 text-[15px] font-medium text-mist">Выставитель</p>
+            {curIssuer ? (
+              <button onClick={() => setIssuersOpen(true)} className="press glass flex w-full items-center gap-3 rounded-[22px] p-3.5 text-left">
+                {curIssuer.logo ? <img src={curIssuer.logo} alt="" className="h-[42px] w-[42px] shrink-0 rounded-xl bg-white object-contain p-1" /> : <span className="grid h-[42px] w-[42px] shrink-0 place-items-center rounded-xl bg-iris/15 text-[17px] font-semibold text-iris">{curIssuer.name.trim().charAt(0).toUpperCase()}</span>}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[16px] font-medium">{curIssuer.name}</span>
+                  <span className="block truncate text-[13px] text-mist">{curIssuer.taxId}{curIssuer.label && curIssuer.label !== curIssuer.name ? ` · ${curIssuer.label}` : ''}</span>
+                </span>
+                <ChevronRight size={18} className="text-fog" />
+              </button>
+            ) : <button onClick={() => setIssuersOpen(true)} className="press glass w-full rounded-2xl px-4 py-3.5 text-left text-[15px] text-amber">Заполните «Мои реквизиты»</button>}
+            {issuers.length > 1 && (
+              <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
+                {issuers.map((i) => <button key={i.id} onClick={() => set({ issuerId: i.id, iban: i.iban ?? draft.iban })} className={`press shrink-0 rounded-xl px-3.5 py-2.5 text-[14px] ${draft.issuerId === i.id ? 'bg-iris/30 text-ink' : 'bg-white/8 text-mist'}`}>{i.label || i.name}</button>)}
+              </div>
+            )}
+          </section>
+
+          {/* 2. invoice number — next in the series, can be typed by hand */}
+          <section className="space-y-2">
+            {usable.length > 1 && (
+              <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
+                {usable.map((x) => <button key={x.id} onClick={() => { set({ seriesId: x.id, requestedNumber: null }); setNumText(null) }} className={`press shrink-0 rounded-xl px-3.5 py-2.5 text-[14px] ${draft.seriesId === x.id ? 'bg-iris/30 text-ink' : 'bg-white/8 text-mist'}`}>{x.name}</button>)}
+              </div>
+            )}
+            {curSeries ? (
+              <Field
+                label="Номер фактуры"
+                value={numText ?? nextCode}
+                onChange={(v) => {
+                  setNumText(v)
+                  const r = parseRequestedNumber(curSeries.id, v, draft.id)
+                  if ('number' in r) set({ requestedNumber: r.number })
+                }}
+                error={numError}
+                hint={numError ? undefined : draft.requestedNumber != null ? `Указан вручную. Следующие фактуры продолжат с ${formatCode(curSeries, Math.max(autoNumber(curSeries.id) ?? 1, draft.requestedNumber + 1))}.` : !seriesOwnedHere(curSeries) ? 'Серия выпускается на другом устройстве' : 'Следующий по порядку. Нажмите, чтобы указать другой.'}
+                right={draft.requestedNumber != null ? <button type="button" onClick={() => { set({ requestedNumber: null }); setNumText(null) }} className="press rounded-xl bg-white/10 px-2.5 py-1.5 text-[13px] text-iris">Авто</button> : undefined}
+                maxLength={30}
+              />
+            ) : <button onClick={() => setSeriesOpen(true)} className="press glass w-full rounded-2xl px-4 py-3.5 text-left text-[15px] text-amber">Настройте нумерацию: укажите следующий номер</button>}
+          </section>
+
+          {/* 3. client */}
           <section className="space-y-2">
             <p className="px-1 text-[15px] font-medium text-mist">Клиент</p>
             <button onClick={() => setPicker(true)} className="press glass flex w-full items-center gap-3 rounded-[22px] p-3.5 text-left">
@@ -370,30 +422,13 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
             {client && <button onClick={() => setTaxFor(client.id)} className="press px-1 text-[14px] text-iris">{client.taxId ? 'Изменить реквизиты клиента' : 'Добавить реквизиты: фото, скриншот или вручную'}</button>}
           </section>
 
-          {/* issuer + series */}
-          <section className="space-y-2">
-            <p className="px-1 text-[15px] font-medium text-mist">Выставитель и номер</p>
-            {issuers.length ? (
-              <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
-                {issuers.map((i) => <button key={i.id} onClick={() => set({ issuerId: i.id, iban: i.iban ?? draft.iban })} className={`press shrink-0 rounded-xl px-3.5 py-2.5 text-[14px] ${draft.issuerId === i.id ? 'bg-iris/30 text-ink' : 'bg-white/8 text-mist'}`}>{i.label || i.name}</button>)}
-                <button onClick={() => setIssuersOpen(true)} aria-label="Мои реквизиты" className="press shrink-0 rounded-xl bg-white/8 px-3 py-2.5 text-mist"><Plus size={16} /></button>
-              </div>
-            ) : <button onClick={() => setIssuersOpen(true)} className="press glass w-full rounded-2xl px-4 py-3.5 text-left text-[15px] text-amber">Заполните «Мои реквизиты»</button>}
-            {usable.length ? (
-              <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
-                {usable.map((s) => <button key={s.id} onClick={() => set({ seriesId: s.id })} className={`press shrink-0 rounded-xl px-3.5 py-2.5 text-[14px] ${draft.seriesId === s.id ? 'bg-iris/30 text-ink' : 'bg-white/8 text-mist'}`}>{s.name}</button>)}
-              </div>
-            ) : <button onClick={() => setSeriesOpen(true)} className="press glass w-full rounded-2xl px-4 py-3.5 text-left text-[15px] text-amber">Настройте нумерацию: укажите следующий номер</button>}
-            {curSeries && <p className="px-1 text-[13px] text-mist">Номер при выставлении: <span className="num text-ink">{nextCode}</span>{!seriesOwnedHere(curSeries) ? ' · серия выпускается на другом устройстве' : ''}</p>}
-          </section>
-
-          {/* dates */}
+          {/* 4. date */}
           <section>
             <label className="block"><span className="mb-1.5 block px-1 text-[13px] text-mist">Дата выставления</span>
               <input type="date" value={draft.issueDate} onChange={(e) => set({ issueDate: e.target.value })} className="glass h-14 w-full rounded-2xl px-3 outline-none" /></label>
           </section>
 
-          {/* lines */}
+          {/* 5. services */}
           <section className="space-y-2">
             <p className="px-1 text-[15px] font-medium text-mist">Услуги</p>
             {draft.lines.map((l) => (
@@ -404,7 +439,7 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
             <button onClick={() => set({ lines: [...draft.lines, newLine()] })} className="press glass flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-[15px] text-iris"><Plus size={18} /> Добавить строку</button>
           </section>
 
-          {/* taxes */}
+          {/* 6. taxes, payment, notes, totals */}
           <section className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
               <Field label="IVA, %" value={rates.vat} inputMode="decimal" maxLength={6} error={rates.vat.trim() && parseRate(rates.vat) === null ? 'Неверная ставка' : null}
@@ -438,8 +473,8 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
         </div>
       )}
 
-      {confirmIssue && (
-        <div className="anim-fade fixed inset-0 z-[60] grid place-items-center bg-black/60 p-6" onClick={() => !busy && setConfirmIssue(false)}>
+      {confirmIssue && createPortal(
+        <div className="anim-fade fixed inset-0 z-[90] grid place-items-center bg-black/60 p-6" onClick={() => !busy && setConfirmIssue(false)}>
           <div className="glass-strong w-full max-w-sm rounded-[28px] p-5" onClick={(e) => e.stopPropagation()}>
             <p className="text-[17px] font-semibold">Выставить фактуру {nextCode}?</p>
             <p className="mt-1 text-[14px] text-mist">{client?.legalName || client?.name}, {fmt(totals?.total ?? 0)}. Номер закрепится за этой фактурой, изменить её будет нельзя.</p>
@@ -449,7 +484,7 @@ export function InvoiceSheet({ open, invoiceId, clientId, onClose, onOpen }: { o
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       <ClientPicker open={picker} onClose={() => setPicker(false)} onPick={(id) => { set({ clientId: id }); setPicker(false); const c = getState().clients.find((x) => x.id === id); if (c && (!c.taxId || !c.address)) setTaxFor(id) }} onNew={() => { setPicker(false); setTaxFor(null) }} />
       <ClientTaxSheet open={taxFor !== undefined} clientId={taxFor} onClose={() => setTaxFor(undefined)} onSaved={(id) => set({ clientId: id })} />

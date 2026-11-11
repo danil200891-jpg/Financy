@@ -10,12 +10,13 @@ import { PrimaryButton, Sheet } from '../ui'
 import { Field } from './Field'
 
 type Form = ClientFields & { name: string; country?: string }
+const PLACEHOLDER: Partial<Record<keyof Form, string>> = { province: 'Barcelona, Navarra, Madrid…' }
 type Key = keyof Form
-const LABELS: [Key, string][] = [['legalName', 'Юридическое название'], ['taxId', 'NIF / NIE / CIF'], ['address', 'Адрес'], ['postalCode', 'Индекс'], ['city', 'Город'], ['country', 'Страна'], ['email', 'Email'], ['phone', 'Телефон']]
+const LABELS: [Key, string][] = [['legalName', 'Юридическое название'], ['taxId', 'NIF / NIE / CIF'], ['address', 'Адрес'], ['postalCode', 'Индекс'], ['city', 'Город'], ['province', 'Провинция / область'], ['country', 'Страна'], ['email', 'Email'], ['phone', 'Телефон']]
 
 const fromClient = (id: string | null | undefined): Form => {
   const c = getState().clients.find((x) => x.id === id)
-  return c ? { name: c.name, legalName: c.legalName ?? '', taxId: c.taxId ?? '', address: c.address ?? '', postalCode: c.postalCode ?? '', city: c.city ?? '', country: c.country ?? '', email: c.email ?? '', phone: c.phone ?? '' } : { name: '', country: 'España' }
+  return c ? { name: c.name, legalName: c.legalName ?? '', taxId: c.taxId ?? '', address: c.address ?? '', postalCode: c.postalCode ?? '', city: c.city ?? '', province: c.province ?? '', country: c.country ?? '', email: c.email ?? '', phone: c.phone ?? '' } : { name: '', country: 'España' }
 }
 
 /**
@@ -85,7 +86,7 @@ export function ClientTaxSheet({ open, clientId, onClose, onSaved }: { open: boo
       actions.updateClient(id, {
         ...(clientId ? { name: form.name.trim().replace(/\s+/g, ' ') } : {}),
         legalName: clean(form.legalName), taxId: clean(form.taxId)?.toUpperCase().replace(/[\s.-]/g, ''), address: clean(form.address), postalCode: clean(form.postalCode),
-        city: clean(form.city), country: clean(form.country), email: clean(form.email)?.toLowerCase(), phone: clean(form.phone),
+        city: clean(form.city), province: clean(form.province), country: clean(form.country), email: clean(form.email)?.toLowerCase(), phone: clean(form.phone),
       })
       await waitForWrites()
       toast('Реквизиты клиента сохранены')
@@ -136,6 +137,7 @@ export function ClientTaxSheet({ open, clientId, onClose, onSaved }: { open: boo
                 hint={k === 'taxId' && kind ? `${TAX_ID_LABEL[kind]} — проверен` : undefined}
                 inputMode={k === 'email' ? 'email' : k === 'phone' ? 'tel' : k === 'postalCode' ? 'numeric' : 'text'}
                 maxLength={k === 'address' ? 600 : 300}
+                placeholder={PLACEHOLDER[k]}
               />
             </div>
           ))}

@@ -13,7 +13,7 @@ const MONEY = 1e12
 
 function validParty(p) {
   return !!p && typeof p === 'object' && isStr(p.name, 300) && isStr(p.taxId, 40) && isStr(p.address, 600)
-    && optStr(p.postalCode, 20) && optStr(p.city, 120) && optStr(p.country, 80) && optStr(p.email, 200) && optStr(p.phone, 60)
+    && optStr(p.postalCode, 20) && optStr(p.city, 120) && optStr(p.province, 120) && optStr(p.country, 80) && optStr(p.email, 200) && optStr(p.phone, 60)
 }
 
 export function validInvoicing(r) {
@@ -42,6 +42,7 @@ export function validInvoicing(r) {
     if (issuedLike !== (r.number !== null && r.number !== undefined)) return false
     if (issuedLike && (!int(r.number, 1, 1e9) || !isStr(r.code, 40) || !r.code || !isDate(r.issuedAt) || !validParty(r.issuer) || !validParty(r.client) || !r.totals)) return false
     if (!issuedLike && r.code !== null && r.code !== undefined) return false
+    if (r.requestedNumber !== undefined && r.requestedNumber !== null && (issuedLike || !int(r.requestedNumber, 1, 1e9))) return false
     if (r.issuer != null && (!validParty(r.issuer) || !optStr(r.issuer.iban, 40))) return false
     if (r.client != null && !validParty(r.client)) return false
     if (r.totals != null && !['base', 'vat', 'irpf', 'total'].every((k) => int(r.totals[k], -MONEY, MONEY))) return false

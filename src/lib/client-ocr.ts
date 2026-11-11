@@ -8,6 +8,8 @@ export interface ClientFields {
   address?: string
   postalCode?: string
   city?: string
+  /** only when written in the text (e.g. «08019 Barcelona (Barcelona)», «Provincia: Navarra») */
+  province?: string
   email?: string
   phone?: string
 }
@@ -34,6 +36,49 @@ function candidatesTaxId(line: string): string[] {
     if (v.length >= 9 && v.length <= 11) out.push(v.startsWith('ES') && v.length === 11 ? v.slice(2) : v)
   }
   return out
+}
+
+/** The 52 Spanish provinces with common spellings (Castilian / co-official), as written on documents. */
+const PROVINCES: [string, string[]][] = [
+  ['Álava', ['alava', 'araba']], ['Albacete', ['albacete']], ['Alicante', ['alicante', 'alacant']], ['Almería', ['almeria']], ['Asturias', ['asturias']], ['Ávila', ['avila']],
+  ['Badajoz', ['badajoz']], ['Barcelona', ['barcelona']], ['Bizkaia', ['bizkaia', 'vizcaya']], ['Burgos', ['burgos']], ['Cáceres', ['caceres']], ['Cádiz', ['cadiz']],
+  ['Cantabria', ['cantabria']], ['Castellón', ['castellon', 'castello']], ['Ciudad Real', ['ciudad real']], ['Córdoba', ['cordoba']], ['A Coruña', ['a coruna', 'la coruna', 'coruna']],
+  ['Cuenca', ['cuenca']], ['Gipuzkoa', ['gipuzkoa', 'guipuzcoa']], ['Girona', ['girona', 'gerona']], ['Granada', ['granada']], ['Guadalajara', ['guadalajara']], ['Huelva', ['huelva']],
+  ['Huesca', ['huesca']], ['Illes Balears', ['illes balears', 'islas baleares', 'baleares', 'balears']], ['Jaén', ['jaen']], ['León', ['leon']], ['Lleida', ['lleida', 'lerida']],
+  ['Lugo', ['lugo']], ['Madrid', ['madrid']], ['Málaga', ['malaga']], ['Murcia', ['murcia']], ['Navarra', ['navarra', 'nafarroa']], ['Ourense', ['ourense', 'orense']],
+  ['Palencia', ['palencia']], ['Las Palmas', ['las palmas']], ['Pontevedra', ['pontevedra']], ['La Rioja', ['la rioja', 'rioja']], ['Salamanca', ['salamanca']],
+  ['Santa Cruz de Tenerife', ['santa cruz de tenerife', 'tenerife']], ['Segovia', ['segovia']], ['Sevilla', ['sevilla']], ['Soria', ['soria']], ['Tarragona', ['tarragona']],
+  ['Teruel', ['teruel']], ['Toledo', ['toledo']], ['Valencia', ['valencia']], ['Valladolid', ['valladolid']], ['Zamora', ['zamora']], ['Zaragoza', ['zaragoza']],
+  ['Ceuta', ['ceuta']], ['Melilla', ['melilla']],
+]
+const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim()
+const provinceOf = (s: string) => { const f = fold(s); return PROVINCES.find(([, names]) => names.includes(f))?.[0] }
+
+/**
+ * A province only when the text states it: after a «Provincia» label, in brackets or after a comma
+ * next to the city, or alone on its own line. A city that merely shares the province's name
+ * (Barcelona, Madrid…) is not taken as the province.
+ */
+function findProvince(lines: string[], city?: string) {
+  for (const l of lines) {
+    const m = l.match(/^provincia\s*[:.-]?\s*(.+)$/i)
+    if (m && provinceOf(m[1])) return provinceOf(m[1])
+  }
+  for (const l of lines) {
+    if (!/\b\d{5}\b/.test(l) && !(city && l.includes(city))) continue
+    const br = l.match(/\(([^)]{2,40})\)/)
+    if (br && provinceOf(br[1])) return provinceOf(br[1])
+    const parts = l.split(/[,–-]/).map((x) => x.trim()).filter(Boolean)
+    for (const part of parts.slice(1)) {
+      const pv = provinceOf(part.replace(/\b(espa[nñ]a|spain)\b/i, ''))
+      if (pv && (!city || fold(part) !== fold(city))) return pv
+    }
+  }
+  for (const l of lines) {
+    const pv = provinceOf(l)
+    if (pv && (!city || fold(l) !== fold(city))) return pv
+  }
+  return undefined
 }
 
 export function recognizeClient(text: string): ClientRecognition {
@@ -63,8 +108,11 @@ export function recognizeClient(text: string): ClientRecognition {
 
   for (const l of lines) {
     const m = l.match(/\b((?:0[1-9]|[1-4]\d|5[0-2])\d{3})\s*[,-]?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' .()-]{1,60})/)
-    if (m && !/^\d+$/.test(m[2])) { fields.postalCode = m[1]; fields.city = m[2].replace(/\s*\(.*$/, '').trim(); break }
+    if (m && !/^\d+$/.test(m[2])) { fields.postalCode = m[1]; fields.city = m[2].replace(/\s*\(.*$/, '').replace(/\s*,.*$/, '').trim(); break }
   }
+
+  const province = findProvince(lines, fields.city)
+  if (province) fields.province = province
 
   const street = lines.find((l) => STREET.test(l))
   if (street) fields.address = street.replace(/^(domicilio(\s+fiscal)?|direcci[oó]n|address)\s*[:.-]?\s*/i, '')

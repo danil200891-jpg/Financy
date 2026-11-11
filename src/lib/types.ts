@@ -52,6 +52,8 @@ export interface Client {
   address?: string
   postalCode?: string
   city?: string
+  /** provincia (Barcelona, Navarra, …), optional */
+  province?: string
   country?: string
   email?: string
   phone?: string
