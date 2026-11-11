@@ -28,7 +28,7 @@
   --sat: env(safe-area-inset-top);
   --sab: env(safe-area-inset-bottom);
   --bottom-nav-height: 72px;
-  --bottom-nav-gap: max(env(safe-area-inset-bottom, 0px), 10px);
+  --bottom-nav-gap: env(safe-area-inset-bottom, 0px);
   --bottom-content-clearance: calc(var(--bottom-nav-height) + var(--bottom-nav-gap) + 40px);
 }
 
@@ -123,6 +123,16 @@ html.standalone-app, html.standalone-app body { height: 100%; overflow: hidden; 
 }
 
 .bottom-nav { padding-bottom: var(--bottom-nav-gap); }
+/* A separate, noninteractive layer fades content only at/below the panel edge. */
+.bottom-nav-fade {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: calc(var(--bottom-nav-height) + var(--bottom-nav-gap));
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(6,7,13,0) 0%, rgba(6,7,13,.24) 18%, rgba(6,7,13,.82) 50%, rgba(6,7,13,.98) 75%, #06070d 100%);
+}
+.bottom-nav-surface { z-index: 1; }
 .bottom-nav-surface {
   height: var(--bottom-nav-height);
   overflow: hidden;
@@ -160,7 +170,7 @@ html.standalone-app, html.standalone-app body { height: 100%; overflow: hidden; 
 }
 .bottom-nav-item[aria-current="page"] svg { filter: drop-shadow(0 0 4px rgba(124,140,255,.65)); }
 [data-scroll-reveal="pending"] { opacity: 0; }
-[data-scroll-reveal="arriving"] { animation: scroll-arrive 280ms var(--ease-spring) backwards; }
+[data-scroll-reveal="arriving"] { animation: scroll-arrive 300ms var(--ease-spring) 20ms backwards; }
 @keyframes scroll-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { [data-scroll-reveal] { opacity: 1; animation: none; transform: none; } }
 

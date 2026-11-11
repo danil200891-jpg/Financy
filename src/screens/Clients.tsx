@@ -121,7 +121,7 @@ export function Clients({ nav }: { nav: Nav }) {
         ) : (
           <Card className="mt-4 divide-y divide-line overflow-hidden">
             {rows.map(({ c, sum, count }) => (
-              <button key={c.id} onClick={() => nav.openClient(c.id)} className="press flex w-full items-center gap-3.5 px-4 py-3.5 text-left">
+              <button data-scroll-reveal="" key={c.id} onClick={() => nav.openClient(c.id)} className="press flex w-full items-center gap-3.5 px-4 py-3.5 text-left">
                 <Avatar client={c} />
                 <div className="min-w-0 flex-1">
                   <div className="flex justify-between gap-2">

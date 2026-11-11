@@ -18,6 +18,7 @@ function BalanceCard({ free, income, expense, spark }: { free: number | null; in
   return (
     <div className="px-4 [perspective:900px]">
       <div
+        data-scroll-reveal=""
         className="relative isolate overflow-hidden glass rounded-[26px] p-4 shadow-[0_30px_60px_-25px_rgba(124,140,255,0.6)] transition-transform duration-500 ease-[var(--ease-spring)]"
         style={{ background: 'linear-gradient(135deg,rgba(86,101,255,.35),rgba(20,22,40,.8),rgba(47,217,189,.14))' }}
       >
