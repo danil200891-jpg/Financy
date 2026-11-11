@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
+import { initStandaloneLayout } from './lib/standalone-layout'
 import { useScrollReveal } from './lib/use-scroll-reveal'
 import { TabBar, type Tab } from './components/TabBar'
 import { Home } from './screens/Home'
@@ -21,6 +22,7 @@ export interface Nav {
 }
 
 export default function App() {
+  useLayoutEffect(initStandaloneLayout, [])
   const [tab, setTab] = useState<Tab>('home')
   const reveal = useScrollReveal(tab)
   const [add, setAdd] = useState<AddMode | null>(null)
@@ -37,11 +39,11 @@ export default function App() {
     openEdit: setEditId,
     openClient: setClientId,
     openSettings: () => setSettings(true),
-    goTab: (t) => { setTab(t); window.scrollTo({ top: 0 }) },
+    goTab: (t) => { setTab(t); if (!document.documentElement.classList.contains('standalone-app')) window.scrollTo({ top: 0 }) },
   }
 
   return (
-    <div className="mx-auto min-h-full max-w-[520px]">
+    <div className="app-frame mx-auto min-h-full max-w-[520px]">
       {/* status-bar blur so content never collides with the notch / Dynamic Island */}
       <div className="fixed inset-x-0 top-0 z-30 h-[env(safe-area-inset-top)] bg-abyss/75 backdrop-blur-xl" />
       <main key={tab} ref={reveal} className="app-content">

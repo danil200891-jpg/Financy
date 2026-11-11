@@ -28,7 +28,7 @@
   --sat: env(safe-area-inset-top);
   --sab: env(safe-area-inset-bottom);
   --bottom-nav-height: 72px;
-  --bottom-nav-gap: max(env(safe-area-inset-bottom, 0px), 10px);
+  --bottom-nav-gap: 0px;
   --bottom-content-clearance: calc(var(--bottom-nav-height) + var(--bottom-nav-gap) + 40px);
 }
 
@@ -111,7 +111,28 @@ button.press:not(.glass):not(.glass-strong):not(.glass-tint) {
 
 /* Every tab scrolls past the floating panel, including iPhone's home indicator. */
 .app-content { padding-bottom: var(--bottom-content-clearance); }
+/* Installed WebViews must not change root scroll bounds when a short tab replaces
+   a long one. Scroll only the screen, keeping the global viewport/navigation stable. */
+html.standalone-app, html.standalone-app body { height: 100%; overflow: hidden; }
+.standalone-app #root, .standalone-app .app-frame { height: 100%; min-height: 0; }
+.standalone-app .app-content {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scroll-padding-bottom: var(--bottom-content-clearance);
+}
+
 .bottom-nav { padding-bottom: var(--bottom-nav-gap); }
+/* A separate, noninteractive layer fades content only at/below the panel edge. */
+.bottom-nav-fade {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: calc(var(--bottom-nav-height) + var(--bottom-nav-gap));
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(6,7,13,0) 0%, rgba(6,7,13,.12) 25%, rgba(6,7,13,.42) 50%, rgba(6,7,13,.78) 72%, rgba(6,7,13,.93) 90%, rgba(6,7,13,.975) 100%);
+}
+.bottom-nav-surface { z-index: 1; }
 .bottom-nav-surface {
   height: var(--bottom-nav-height);
   overflow: hidden;
@@ -149,7 +170,7 @@ button.press:not(.glass):not(.glass-strong):not(.glass-tint) {
 }
 .bottom-nav-item[aria-current="page"] svg { filter: drop-shadow(0 0 4px rgba(124,140,255,.65)); }
 [data-scroll-reveal="pending"] { opacity: 0; }
-[data-scroll-reveal="arriving"] { animation: scroll-arrive 280ms var(--ease-spring) backwards; }
+[data-scroll-reveal="arriving"] { animation: scroll-arrive 300ms var(--ease-spring) 20ms backwards; }
 @keyframes scroll-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { [data-scroll-reveal] { opacity: 1; animation: none; transform: none; } }
 

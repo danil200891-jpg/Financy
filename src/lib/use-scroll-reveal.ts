@@ -7,6 +7,8 @@ export function useScrollReveal(screen: string) {
     const container = root.current, motion = matchMedia('(prefers-reduced-motion: reduce)')
     if (!container || motion.matches || !('IntersectionObserver' in window)) return
     const seen = new WeakSet<HTMLElement>(), pending = new Set<HTMLElement>()
+    const visibleBottom = document.querySelector('.bottom-nav-surface')?.getBoundingClientRect().top ?? innerHeight
+    const coveredBottom = Math.max(0, innerHeight - visibleBottom)
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue
@@ -14,14 +16,14 @@ export function useScrollReveal(screen: string) {
         element.dataset.scrollReveal = 'arriving'
         pending.delete(element); observer.unobserve(element)
       }
-    }, { rootMargin: '0px', threshold: 0.01 })
+    }, { rootMargin: `0px 0px -${coveredBottom}px 0px`, threshold: 0.01 })
     const collect = (node: HTMLElement) => {
       const elements = [...(node.matches('[data-scroll-reveal]') ? [node] : []), ...node.querySelectorAll<HTMLElement>('[data-scroll-reveal]')]
       for (const element of elements) {
         if (seen.has(element)) continue
         seen.add(element)
-        if (motion.matches || element.closest('[role="dialog"]') || element.querySelector('[data-scroll-reveal],input,textarea,select')) continue
-        if (element.getBoundingClientRect().top < innerHeight) continue
+        if (motion.matches || element.closest('[role="dialog"]') || element.querySelector('[data-scroll-reveal]') || [...element.querySelectorAll('input,textarea,select')].some((input) => getComputedStyle(input).visibility !== 'hidden')) continue
+        if (element.getBoundingClientRect().top < visibleBottom) continue
         element.dataset.scrollReveal = 'pending'; pending.add(element); observer.observe(element)
       }
     }

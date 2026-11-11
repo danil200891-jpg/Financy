@@ -29,6 +29,7 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   }
   return createPortal(
     <nav className="bottom-nav pointer-events-none fixed inset-0 z-40 flex items-end justify-center px-3">
+      <div aria-hidden="true" className="bottom-nav-fade" />
       <div className="bottom-nav-surface pointer-events-auto relative mx-auto flex w-full max-w-[520px] shrink-0 items-stretch rounded-[28px] p-1">
         {TABS.map(item)}
       </div>
