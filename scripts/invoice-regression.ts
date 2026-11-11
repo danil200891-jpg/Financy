@@ -285,3 +285,80 @@ export async function samplePdfBase64() {
   for (const b of bytes) s += String.fromCharCode(b)
   return btoa(s)
 }
+
+/* ---------------- restart check: details and numbering survive app restarts ---------------- */
+const ISSUER = { label: 'Autónomo', name: 'Restart Test Autónomo', taxId: 'X1234567L', address: 'Calle Mayor 12, 3º B', postalCode: '28013', city: 'Madrid', country: 'España', email: 'restart@example.com', phone: '+34 600 111 222', iban: 'ES91 2100 0418 4502 0005 1332', logo: null }
+const CLIENTS = [
+  { name: 'Lumen', legalName: 'Estudio Lumen S.L.', taxId: 'B12345674', address: 'Avenida Diagonal 100', postalCode: '08019', city: 'Barcelona', country: 'España', email: 'admin@lumen.example' },
+  { name: 'Ana', legalName: 'Ana García López', taxId: '12345678Z', address: 'Calle Sol 5', postalCode: '29001', city: 'Málaga', country: 'España' },
+]
+const issuerKeys = ['name', 'taxId', 'address', 'postalCode', 'city', 'country', 'email', 'phone', 'iban'] as const
+
+async function issueSequence(clientIds: string[], labels: string[]) {
+  const codes: string[] = []
+  for (const [i, label] of labels.entries()) {
+    const d = newDraft({ clientId: clientIds[i % clientIds.length] })
+    // what the form gets without the user touching anything
+    check(d.issuerId === defaultIssuerId() && d.iban === ISSUER.iban && d.irpfRate === 0 && d.dueDate === null, `new invoice not pre-filled: issuer=${d.issuerId} iban=${d.iban}`)
+    await saveDraft({ ...d, lines: [{ id: `r-${label}`, description: label, quantity: 100, unitPrice: 25000 }] })
+    const done = await issueInvoice(d.id)
+    for (const k of issuerKeys) check((done.issuer as Record<string, unknown>)[k] === ISSUER[k], `issuer ${k} missing on ${done.code}: ${(done.issuer as Record<string, unknown>)[k]}`)
+    const c = CLIENTS[i % CLIENTS.length]
+    check(done.client?.name === c.legalName && done.client?.taxId === c.taxId && done.client?.address === c.address && done.client?.postalCode === c.postalCode && done.client?.city === c.city, `client data missing on ${done.code}`)
+    codes.push(done.code!)
+  }
+  return codes
+}
+const defaultIssuerId = () => (getState().invoicing.find((r) => r.kind === 'issuer') as { id: string } | undefined)?.id ?? null
+const issuedCodes = () => invoicesOf(getState().all.invoicing).filter((i) => i.status !== 'draft').map((i) => i.code!).sort()
+
+export async function restartPhase1() {
+  await initStore()
+  check(!getState().all.invoicing.length && !getState().clients.length, 'restart test did not start from an empty origin')
+  saveIssuer(ISSUER)
+  createSeries('Фактуры', 'F-0026')
+  const ids = CLIENTS.map((c) => { const x = actions.addClient(c.name, '#7c8cff'); actions.updateClient(x.id, { ...c, name: c.name }); return x.id })
+  await waitForWrites()
+  const codes = await issueSequence(ids, ['Видеосъёмка', 'SMM и продвижение социальных сетей', 'Видеосъёмка'])
+  check(codes.join() === 'F-0026,F-0027,F-0028', `first run codes ${codes}`)
+  return `phase 1: ${codes.join(', ')}`
+}
+
+export async function restartPhase2() {
+  await initStore()
+  // nothing re-entered after the restart
+  const issuer = getState().invoicing.find((r) => r.kind === 'issuer') as unknown as Record<string, unknown>
+  for (const k of issuerKeys) check(issuer?.[k] === ISSUER[k], `issuer ${k} lost after restart`)
+  const clients = CLIENTS.map((c) => getState().clients.find((x) => x.name === c.name))
+  check(clients.every((x, i) => x && x.taxId === CLIENTS[i].taxId && x.address === CLIENTS[i].address && x.legalName === CLIENTS[i].legalName), 'client tax data lost after restart')
+  check(getState().clients.length === 2, 'clients duplicated after restart')
+  // the form opens pre-filled after a restart
+  const root = document.getElementById('root')!
+  createRoot(root).render(createElement(App))
+  await wait(400)
+  ;[...document.querySelectorAll('nav button')].find((n) => n.getAttribute('aria-label') === 'Клиенты')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await wait(200)
+  ;[...document.querySelectorAll('button')].find((n) => n.textContent?.trim() === 'Создать фактуру')!.click()
+  await wait(400)
+  const dialog = document.querySelector('[role="dialog"]')!
+  const iban = [...dialog.querySelectorAll('label')].find((l) => l.textContent?.startsWith('IBAN'))?.querySelector('input')?.value
+  check(iban === ISSUER.iban, `IBAN not pre-filled in the form: ${iban}`)
+  check(dialog.textContent?.includes('Номер при выставлении: F-0029'), 'form does not show the next number F-0029')
+  const issuerChip = [...dialog.querySelectorAll('button')].find((b) => b.textContent === ISSUER.label)
+  check(issuerChip && issuerChip.className.includes('bg-iris'), 'issuer profile not selected in the form')
+  const codes = await issueSequence(clients.map((x) => x!.id), ['Монтаж', 'Видеосъёмка', 'SMM и продвижение социальных сетей'])
+  check(codes.join() === 'F-0029,F-0030,F-0031', `after restart codes ${codes}`)
+  return `phase 2: ${codes.join(', ')}`
+}
+
+export async function restartPhase3() {
+  await initStore()
+  const codes = issuedCodes()
+  check(codes.join() === 'F-0026,F-0027,F-0028,F-0029,F-0030,F-0031' && new Set(codes).size === codes.length, `numbers after second restart: ${codes}`)
+  const series = getState().invoicing.find((r) => r.kind === 'series') as InvoiceSeries
+  check(series.next === 32, `series counter ${series.next}`)
+  check(getState().clients.length === 2 && getState().invoicing.filter((r) => r.kind === 'issuer').length === 1, 'profiles or clients duplicated')
+  const d = newDraft({ clientId: getState().clients[0].id })
+  check(d.issuerId === defaultIssuerId() && d.iban === ISSUER.iban, 'details not pre-filled after second restart')
+  return `phase 3: 6 unique consecutive numbers, next F-0032, details still pre-filled`
+}

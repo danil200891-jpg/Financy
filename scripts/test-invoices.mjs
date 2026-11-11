@@ -71,6 +71,14 @@ try {
   })
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
   console.log(result.result.value)
+  // restarts: a separate, empty origin; each navigation is a full app restart (memory cleared, IndexedDB kept)
+  for (const phase of ['restartPhase1', 'restartPhase2', 'restartPhase3']) {
+    await cdp('Page.navigate', { url: `http://localhost:${port}/` })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const r = await cdp('Runtime.evaluate', { expression: `import('/test.js').then(module => module.${phase}())`, awaitPromise: true, returnByValue: true })
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text)
+    console.log(`PASS restart ${r.result.value}`)
+  }
   if (process.env.INVOICE_PDF_OUT) {
     const pdf = await cdp('Runtime.evaluate', { expression: "import('/test.js').then(module => module.samplePdfBase64())", awaitPromise: true, returnByValue: true })
     const { writeFileSync } = await import('node:fs')
