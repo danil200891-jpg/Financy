@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useScrollReveal } from './lib/use-scroll-reveal'
 import { TabBar, type Tab } from './components/TabBar'
 import { Home } from './screens/Home'
 import { Planning } from './screens/Planning'
@@ -21,6 +22,7 @@ export interface Nav {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('home')
+  const reveal = useScrollReveal(tab)
   const [add, setAdd] = useState<AddMode | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
@@ -42,7 +44,7 @@ export default function App() {
     <div className="mx-auto min-h-full max-w-[520px]">
       {/* status-bar blur so content never collides with the notch / Dynamic Island */}
       <div className="fixed inset-x-0 top-0 z-30 h-[env(safe-area-inset-top)] bg-abyss/75 backdrop-blur-xl" />
-      <main key={tab} className="anim-screen app-content">
+      <main key={tab} ref={reveal} className="app-content">
         {tab === 'home' && <Home nav={nav} />}
         {tab === 'planning' && <Planning />}
         {tab === 'history' && <History nav={nav} />}

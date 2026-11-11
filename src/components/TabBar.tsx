@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { BarChart3, Clock3, House, Users, Wallet } from 'lucide-react'
 
 export type Tab = 'home' | 'history' | 'clients' | 'analytics' | 'planning'
@@ -18,7 +19,7 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         key={t.id}
         onClick={() => onTab(t.id)}
         aria-label={t.label}
-        className={`press flex min-h-[64px] min-w-0 flex-1 flex-col items-center gap-1 pt-2 pb-1 transition-colors ${active ? 'text-ink' : 'text-fog'}`}
+        className={`bottom-nav-item flex min-h-[64px] min-w-0 flex-1 flex-col items-center gap-1 pt-2 pb-1 transition-colors ${active ? 'text-ink' : 'text-fog'}`}
         aria-current={active ? 'page' : undefined}
       >
         <t.Icon size={24} strokeWidth={active ? 2.2 : 1.8} />
@@ -26,11 +27,11 @@ export function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
       </button>
     )
   }
-  return (
+  return createPortal(
     <nav className="bottom-nav fixed inset-x-0 bottom-0 z-40 px-3">
-      <div className="glass-strong bottom-nav-surface relative mx-auto flex max-w-[520px] items-end rounded-[28px] px-1 pb-1.5 shadow-[0_20px_50px_-15px_rgba(0,0,0,0.8)]">
+      <div className="glass-strong bottom-nav-surface relative mx-auto flex max-w-[520px] items-end rounded-[28px] px-1 pb-1.5">
         {TABS.map(item)}
       </div>
-    </nav>
+    </nav>, document.body
   )
 }
