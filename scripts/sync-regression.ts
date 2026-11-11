@@ -5,6 +5,8 @@ import * as backup from '../src/lib/backup'
 import * as sync from '../src/lib/sync'
 import { getDevice } from '../src/lib/sync/device'
 import { savePlan, savePlanWithReserve, closePlan, financials, reserve } from '../src/lib/planning'
+import { createSeries, invoicesOf, issueInvoice, issueProblems, newDraft, saveDraft, saveIssuer, seriesOf } from '../src/lib/invoice-actions'
+import type { Invoice } from '../src/lib/invoice-types'
 
 const draft = (title: string, amount: number) => ({
   title, amount, type: 'income' as const, currency: 'EUR', date: new Date().toISOString(), categoryId: 'c-work', clientId: null, source: 'manual' as const,
@@ -81,6 +83,29 @@ export const api = {
   },
   conflicts: () => sync.getSyncStatus().conflicts,
   resolve: async (choice: 'kept' | 'other') => { const c = sync.getSyncStatus().conflicts[0]; await sync.resolveConflict(c, choice) },
+  async invSetup() {
+    saveIssuer({ label: 'Test', name: 'Test Autónomo', taxId: '12345678Z', address: 'Calle Prueba 1', iban: '', logo: null })
+    const series = createSeries('Фактуры', 'F-0026')
+    const c = actions.addClient('Invoice Client', '#7c8cff')
+    actions.updateClient(c.id, { legalName: 'Invoice Client S.L.', taxId: 'B12345674', address: 'Avenida Test 5' })
+    await waitForWrites()
+    return { clientId: c.id, seriesId: series.id }
+  },
+  async invIssue(clientId: string, desc: string) {
+    const d = newDraft({ clientId })
+    await saveDraft({ ...d, lines: [{ id: 'l1', description: desc, quantity: 100, unitPrice: 30000 }] })
+    return (await issueInvoice(d.id)).code
+  },
+  invList: () => invoicesOf(getState().all.invoicing).map((i) => ({ id: i.id, code: i.code, status: i.status })).sort((a, b) => a.id.localeCompare(b.id)),
+  invCanIssueHere(clientId: string) { const d = newDraft({ clientId }); return issueProblems({ ...d, lines: [{ id: 'x', description: 'x', quantity: 100, unitPrice: 100 }] }) },
+  /** a second device that ignored series ownership and issued the same number offline */
+  async invForgeDuplicate() {
+    const s0 = seriesOf(getState().invoicing)[0]
+    const src = invoicesOf(getState().all.invoicing).find((i) => i.status !== 'draft')! as Invoice
+    actions.saveInvoicing({ ...src, id: 'inv-forged', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), seriesId: s0.id })
+    await waitForWrites()
+  },
+  invoicingSupported: () => sync.getSyncStatus().invoicingSupported ?? false,
   history: async (id: string) => (await DB.historyFor(id)).map((h) => ({ action: h.action, via: h.via ?? null })),
 }
 ;(window as unknown as { api: typeof api }).api = api

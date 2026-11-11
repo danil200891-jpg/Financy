@@ -24,6 +24,7 @@ Always run `npx tsc -b` and `npm run build` before finishing a change.
 - `src/lib/ocr.ts` Tesseract.js, fully local; assets in `public/ocr` (generated, git-ignored).
 - `src/lib/receipt.ts` OCR text → amount/date/merchant/type. `src/lib/parse.ts` manual text input parser.
 - `src/lib/sync/*` client for the PC sync server (pairing, signed requests, push/pull, conflicts). `sync-server/` plain-Node server (no deps): merge engine, weekly verified backups, Windows setup scripts. Tests: `npm run test:sync-server`, `npm run test:sync`.
+- `src/lib/invoice-types.ts`, `invoicing.ts` (numbering, totals, NIF/IBAN checks), `invoice-actions.ts` (series, drafts, issue, pay, void), `invoice-pdf.ts` (pdf-lib, offline), `client-ocr.ts`; UI in `src/components/invoices/*`. Shape checks shared with the server in `sync-server/lib/invoicing.mjs`. Tests: `npm run test:invoices`.
 - `src/screens/*` screens, `src/components/*` shared UI. Design tokens live in `src/index.css` (`@theme`).
 
 ## Hard rules
@@ -42,6 +43,7 @@ Always run `npx tsc -b` and `npm run build` before finishing a change.
 8. Do not publish, push or create remote repositories without the user's explicit permission.
 9. **External network origins.** Production CSP permits only the app origin and `https://*:47821` (the user's PC sync server on the LAN). Keep dependencies, fonts and OCR assets local. Do not expand external origins without a user request.
 10. **Sync safety.** Never replace the phone database with the server's. Restores are applied as normal edits (`applyAsEdits`) so they sync. The server acknowledges a push only after a durable write and deletes only its own verified backups older than 30 days, always keeping the newest valid one.
+11. **Invoices.** Drafts never hold a number; a number is assigned only when issuing, from the series' owning device. Issued invoices are immutable (void or rectify instead), are never deleted or renumbered by a restore, and a series counter never moves backwards. Issuing never creates income; payment links exactly one income operation. Do not claim VERI*FACTU or legal compliance.
 
 ## Working together (Claude Code + ChatGPT Codex on one repo)
 

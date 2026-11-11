@@ -243,6 +243,26 @@ try {
   st = await phone('api.sync()')
   check(st.phase === 'idle' && st.pending === 0, 'sync after server restart failed')
   console.log('PASS server restart keeps data; sync continues')
+
+  // 10. invoices: issued on the phone reach the PC; numbers stay unique across devices
+  const { clientId } = await phone('api.invSetup()')
+  const code1 = await phone(`api.invIssue('${clientId}', 'Sesión A')`)
+  check(code1 === 'F-0026', `first invoice code ${code1}`)
+  st = await phone('api.sync()')
+  check(st.phase === 'idle' && st.pending === 0 && await phone('api.invoicingSupported()'), `invoice sync status ${JSON.stringify(st)}`)
+  await pc('api.sync()')
+  const pcInv = await pc('api.invList()')
+  check(pcInv.some((i) => i.code === 'F-0026' && i.status === 'issued'), 'issued invoice did not reach the PC')
+  check((await pc(`api.invCanIssueHere('${clientId}')`)).some((p) => p.includes('другом устройстве')), 'PC may issue numbers of the phone series')
+  await pc('api.invForgeDuplicate()')
+  st = await pc('api.sync()')
+  check(st.rejected > 0, 'server accepted a duplicate invoice number')
+  await phone('api.sync()')
+  check(!(await phone('api.invList()')).some((i) => i.id === 'inv-forged'), 'duplicate number reached the phone')
+  check(await phone(`api.invIssue('${clientId}', 'Sesión B')`) === 'F-0027', 'second invoice code')
+  await phone('api.sync()'); await pc('api.sync()')
+  check((await pc('api.invList()')).some((i) => i.code === 'F-0027'), 'second invoice did not reach the PC')
+  console.log('PASS invoices sync phone → PC; series issued from one device; server rejects a duplicate number')
   console.log('All sync regressions passed')
 } catch (e) {
   failed = true

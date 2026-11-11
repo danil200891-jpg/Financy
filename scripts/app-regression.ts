@@ -65,7 +65,7 @@ export async function runAppRegression() {
     request.onerror = () => reject(request.error)
   })
   await initStore()
-  check((await DB.db()).version === 2 && await DB.getMeta('migration-proof') === 'synthetic-preserved-setting', 'v1 upgrade lost settings')
+  check((await DB.db()).version === DB.DB_VERSION && (await DB.db()).objectStoreNames.contains('planning') && (await DB.db()).objectStoreNames.contains('invoicing') && await DB.getMeta('migration-proof') === 'synthetic-preserved-setting', 'v1 upgrade lost settings')
   for (const series of [[0, 0, 0, 100], [10, 5, 20, 20, -30], [1, 1], [0, 50, 0, 50]]) {
     const points = series.map((value, index) => [index * 10, value] as [number, number])
     check(smoothPath(points).includes(' C'), 'Sparkline has no smooth curve')

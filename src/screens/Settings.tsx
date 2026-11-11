@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  ChevronRight, Database, FileJson, FileSpreadsheet, FlaskConical, Plus, RotateCcw, Shapes, Trash2, Undo2, Upload, WifiOff,
+  BadgeEuro, ChevronRight, Database, FileJson, Hash, FileSpreadsheet, FlaskConical, Plus, RotateCcw, Shapes, Trash2, Undo2, Upload, WifiOff,
 } from 'lucide-react'
 import { actions, useStore, waitForWrites } from '../lib/store'
 import { exportCSV, exportJSON, getLastBackup, getPreRestore, parseBackup, restore, undoRestore, type Backup } from '../lib/backup'
@@ -10,6 +10,8 @@ import type { OpType } from '../lib/types'
 import { Card, CategoryIcon, ChevronLeft, ICONS, IconButton, PrimaryButton, Segmented, Sheet } from '../components/ui'
 import { useAppUpdate, applyUpdate, checkForUpdate } from '../lib/updates'
 import { SyncSection } from '../components/SyncSection'
+import { InvoicingSettingsSheet, IssuersSheet } from '../components/invoices/InvoiceSettingsSheets'
+import { issuersOf, seriesOf } from '../lib/invoice-actions'
 
 function AppUpdates() {
   const state = useAppUpdate()
@@ -148,6 +150,9 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const deleted = useStore((s) => s.deleted)
   const [cats, setCats] = useState(false)
   const [trash, setTrash] = useState(false)
+  const [issuers, setIssuers] = useState(false)
+  const [numbering, setNumbering] = useState(false)
+  const invoicing = useStore((s) => s.invoicing)
   const [pending, setPending] = useState<Backup | null>(null)
   const [wipe, setWipe] = useState(false)
   const [canUndo, setCanUndo] = useState(false)
@@ -197,6 +202,13 @@ export function Settings({ onBack }: { onBack: () => void }) {
       items: [
         { Icon: Shapes, label: 'Категории', onClick: () => setCats(true) },
         { Icon: RotateCcw, label: 'Недавно удалённые', hint: deleted.length ? String(deleted.length) : undefined, onClick: () => setTrash(true) },
+      ],
+    },
+    {
+      group: 'Фактуры',
+      items: [
+        { Icon: BadgeEuro, label: 'Мои реквизиты', hint: issuersOf(invoicing).length ? String(issuersOf(invoicing).length) : 'не заполнены', onClick: () => setIssuers(true) },
+        { Icon: Hash, label: 'Нумерация и налоги', hint: seriesOf(invoicing).length ? undefined : 'не настроены', onClick: () => setNumbering(true) },
       ],
     },
     {
@@ -262,7 +274,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
                 ))}
               </Card>
             </section>
-            {i === 1 && <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />}
+            {i === 2 && <SyncSection onRestored={() => getPreRestore().then((b) => setCanUndo(!!b)).catch(() => {})} />}
           </Fragment>))}
 
           <AppUpdates />
@@ -330,6 +342,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
       <CategoriesSheet open={cats} onClose={() => setCats(false)} />
       <TrashSheet open={trash} onClose={() => setTrash(false)} />
+      <IssuersSheet open={issuers} onClose={() => setIssuers(false)} />
+      <InvoicingSettingsSheet open={numbering} onClose={() => setNumbering(false)} />
     </div>
   )
 }

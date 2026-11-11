@@ -56,7 +56,7 @@ function safePlanningRestore(record: PlanningRecord): PlanningRecord {
 }
 
 /** iOS PWAs handle the share sheet better than <a download>; fall back to a download link. */
-async function deliver(blob: Blob, name: string) {
+export async function deliver(blob: Blob, name: string) {
   const file = new File([blob], name, { type: blob.type })
   if (navigator.canShare?.({ files: [file] })) {
     try {

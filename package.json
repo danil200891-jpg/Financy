@@ -1,7 +1,7 @@
 {
   "name": "finance",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "predev": "node scripts/copy-ocr.mjs",
@@ -20,7 +20,8 @@
     "prepare": "git config core.hooksPath .githooks || true",
     "test:sync-server": "node --test sync-server/test/engine.test.mjs sync-server/test/server.test.mjs sync-server/test/planning.test.mjs sync-server/test/invoicing.test.mjs",
     "sync-server": "node sync-server/server.mjs",
-    "test:sync": "node scripts/test-sync.mjs"
+    "test:sync": "node scripts/test-sync.mjs",
+    "test:invoices": "node scripts/test-invoices.mjs"
   },
   "dependencies": {
     "@fontsource-variable/onest": "^5.3.1",

@@ -85,7 +85,7 @@ export default defineConfig(({ mode, isPreview }) => ({
       },
       workbox: {
         // app shell + fonts + OCR worker/WASM/language data → everything works offline after first load
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2,wasm,gz}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2,ttf,wasm,gz}'],
         maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/__/],

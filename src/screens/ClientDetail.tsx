@@ -1,10 +1,14 @@
 import { useMemo, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { ChevronRight, FileText, Plus, Trash2 } from 'lucide-react'
 import type { Nav } from '../App'
 import { actions, useStore, waitForWrites } from '../lib/store'
 import { byPeriod, monthly, totals } from '../lib/stats'
 import { fmt, fmtShort, monthShort } from '../lib/format'
 import { Avatar, Card, ChevronLeft, IconButton, OpRow } from '../components/ui'
+import { InvoiceSheet } from '../components/invoices/InvoiceSheet'
+import { ClientTaxSheet } from '../components/invoices/ClientTaxSheet'
+import { invoicesForClient } from '../lib/invoice-actions'
+import { STATUS_COLOR, STATUS_LABEL, computeTotals, displayStatus } from '../lib/invoicing'
 
 export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack: () => void }) {
   const ops = useStore((s) => s.operations)
@@ -16,6 +20,10 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [limit, setLimit] = useState(100)
+  const invoicing = useStore((s) => s.invoicing)
+  const invoices = useMemo(() => invoicesForClient(invoicing, id).sort((a, b) => b.issueDate.localeCompare(a.issueDate) || b.createdAt.localeCompare(a.createdAt)), [invoicing, id])
+  const [invoice, setInvoice] = useState<{ id: string | null } | null>(null)
+  const [tax, setTax] = useState(false)
   if (!c) return null
 
   const stat = [
@@ -68,6 +76,34 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
           </div>
         </Card>
 
+        <div className="mt-6 mb-3 flex items-center justify-between px-5">
+          <h2 className="text-[20px] font-semibold">Фактуры</h2>
+          <button onClick={() => setInvoice({ id: null })} className="press flex items-center gap-1 rounded-xl bg-white/8 px-3 py-2 text-[14px] text-iris"><Plus size={16} /> Создать</button>
+        </div>
+        <Card className="mx-4 divide-y divide-line overflow-hidden">
+          <button onClick={() => setTax(true)} className="press flex w-full items-center gap-3 px-4 py-3.5 text-left">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px]">Реквизиты клиента</span>
+              <span className={`block truncate text-[13px] ${c.taxId ? 'text-mist' : 'text-fog'}`}>{c.taxId ? `${c.legalName || c.name} · ${c.taxId}` : 'Не указаны — нужны только для фактур'}</span>
+            </span>
+            <ChevronRight size={18} className="text-fog" />
+          </button>
+          {invoices.map((inv) => {
+            const st = displayStatus(inv)
+            const total = (inv.totals ?? computeTotals(inv.lines, inv.vatRate, inv.irpfRate)).total
+            return (
+              <button key={inv.id} onClick={() => setInvoice({ id: inv.id })} className="press flex w-full items-center gap-3 px-4 py-3.5 text-left">
+                <FileText size={20} className="shrink-0 text-iris" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-medium">{inv.code ?? 'Черновик'}</span>
+                  <span className="block text-[12px] text-mist">{inv.issueDate.split('-').reverse().join('.')} · <span className={STATUS_COLOR[st]}>{STATUS_LABEL[st]}</span></span>
+                </span>
+                <span className={`num text-[15px] font-semibold ${st === 'void' ? 'text-fog line-through' : ''}`}>{fmt(total)}</span>
+              </button>
+            )
+          })}
+        </Card>
+
         <h2 className="mt-6 mb-3 px-5 text-[20px] font-semibold">Операции</h2>
         <Card className="mx-4 divide-y divide-line overflow-hidden">
           {own.slice(0, limit).map((o) => (
@@ -76,6 +112,9 @@ export function ClientDetail({ id, nav, onBack }: { id: string; nav: Nav; onBack
         </Card>
         {own.length > limit && <button onClick={() => setLimit((value) => value + 100)} className="glass press mx-4 mt-3 h-12 rounded-2xl px-5 text-[15px] text-iris">Показать ещё</button>}
       </div>
+
+      <InvoiceSheet open={!!invoice} invoiceId={invoice?.id} clientId={id} onClose={() => setInvoice(null)} onOpen={(x) => setInvoice({ id: x })} />
+      <ClientTaxSheet open={tax} clientId={id} onClose={() => setTax(false)} />
 
       {confirm && (
         <div className="anim-fade fixed inset-0 z-50 grid place-items-center bg-black/60 px-8" onClick={() => setConfirm(false)}>
